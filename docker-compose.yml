@@ -1,0 +1,19 @@
+services:
+  backend:
+    build: ./backend
+    volumes:
+      - pdf_data:/data
+    environment:
+      - DATA_DIR=/data
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8015:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pdf_data:
