@@ -68,6 +68,7 @@ interface AppState {
   setSitePdf: (info: PdfInfo) => void;
   setActiveView: (view: 'legend' | 'site') => void;
   addSymbol: (symbol: Omit<SymbolTemplate, 'id' | 'visible' | 'matches' | 'searched' | 'selectedForSearch'>) => void;
+  addCountedSymbol: (symbol: Omit<SymbolTemplate, 'id' | 'visible' | 'searched' | 'selectedForSearch'>) => void;
   removeSymbol: (id: string) => void;
   updateSymbolName: (id: string, name: string) => void;
   updateSymbolColor: (id: string, color: string) => void;
@@ -135,6 +136,15 @@ export const useAppStore = create<AppState>((set) => ({
       symbols: [
         ...state.symbols,
         { ...symbol, id: uuidv4(), visible: true, matches: [], searched: false, selectedForSearch: true },
+      ],
+    })),
+
+  // AI-counted items arrive with their matches already found - never re-queued for auto-count
+  addCountedSymbol: (symbol) =>
+    set((state) => ({
+      symbols: [
+        ...state.symbols,
+        { ...symbol, id: uuidv4(), visible: true, searched: true, selectedForSearch: false },
       ],
     })),
 

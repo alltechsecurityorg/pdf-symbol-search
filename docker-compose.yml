@@ -3,6 +3,8 @@ services:
     build: ./backend
     volumes:
       - pdf_data:/data
+    env_file:
+      - .env
     environment:
       - DATA_DIR=/data
     networks:

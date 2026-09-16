@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore, type SymbolTemplate } from '../store/appStore';
 import { SymbolCard } from './SymbolCard';
-import { runSearchStream, exportResults, saveAnnotatedPdf } from '../api/client';
+import { runSearchStream, exportResults, saveAnnotatedPdf, runAiCount } from '../api/client';
+import { PRESET_COLORS } from './SymbolCard';
 
 export function LegendPanel() {
   const {
@@ -9,12 +10,38 @@ export function LegendPanel() {
     manualModeSymbolId, setIsCropMode, isCropMode, removeSymbol, updateSymbolName, updateSymbolColor, toggleSymbolVisibility,
     toggleSelectedForSearch, appendSymbolMatches, clearSymbolMatchesByTemplate, markSearched, setIsSearching, setSearchProgress,
     setSearchProgressPercent, setManualModeSymbolId, markUnsearched, setFocusMatch, pdfLoading, pdfLoadingMessage,
+    addCountedSymbol,
   } = useAppStore();
 
   const activePdf = sitePdf;
   const totalMatches = symbols.reduce((sum, s) => sum + s.matches.length, 0);
   const hasResults = totalMatches > 0;
   const abortRef = useRef<AbortController | null>(null);
+
+  // --- AI count ---
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiLog, setAiLog] = useState<string[]>([]);
+  const aiAbort = useRef<AbortController | null>(null);
+  const log = (t: string) => setAiLog((l) => [...l.slice(-3), t]);
+  const startAi = () => {
+    if (!sitePdf || aiBusy) return;
+    setAiBusy(true); setAiLog(['Starting AI count…']);
+    aiAbort.current = runAiCount(sitePdf.pdfId, {
+      onStatus: (t) => log(t),
+      onItem: (it) => {
+        const st = useAppStore.getState();
+        // a re-count of the same name replaces the earlier item (and frees its colour)
+        const old = it.replaces ? st.symbols.find((x) => x.templateId === it.replaces) : st.symbols.find((x) => x.name === it.name && x.matches.length > 0);
+        if (old) removeSymbol(old.id);
+        const used = useAppStore.getState().symbols.map((x) => x.color);
+        const color = PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[used.length % PRESET_COLORS.length];
+        addCountedSymbol({ name: it.name, color, thumbnail: it.thumbnail, templateId: it.template_id, cropRegion: it.crop_region, matches: it.matches });
+      },
+      onDone: (summary, cost, n) => { log(`Done - ${n} symbol types (cost $${cost}). ${summary}`); setAiBusy(false); },
+      onError: (e) => { log(`AI count failed: ${e.message}`); setAiBusy(false); },
+    });
+  };
+  const stopAi = () => { aiAbort.current?.abort(); setAiBusy(false); log('Stopped.'); };
 
   const runCount = (toSearch: SymbolTemplate[]) => {
     if (!sitePdf || toSearch.length === 0) return;
@@ -133,6 +160,38 @@ export function LegendPanel() {
               <div className="text-[12px] text-[#8a92a6] mt-1.5">{isCropMode ? 'Smart select is on — hold Space and drag to move around.' : 'Smart select is off — click to turn it on.'}</div>
             </div>
           </button>
+        )}
+      </div>
+
+      <div className="px-4 pb-2">
+        {!aiBusy ? (
+          <button
+            onClick={startAi}
+            disabled={!activePdf || pdfLoading}
+            className="w-full text-left rounded-md bg-[#262b3a] border-b-4 border-sky-500 px-5 py-3 flex items-center gap-3 cursor-pointer hover:bg-[#2a3040] transition-colors disabled:opacity-40 disabled:cursor-default"
+          >
+            <span className="text-xl">✨</span>
+            <span>
+              <span className="block text-[14px] font-bold text-white">AI count <span className="text-[11px] font-semibold text-sky-400 align-middle ml-1">BETA</span></span>
+              <span className="block text-[12px] text-[#8a92a6] mt-0.5">AI reads the sheet and counts every symbol type for you.</span>
+            </span>
+          </button>
+        ) : (
+          <div className="rounded-md bg-[#262b3a] border-b-4 border-sky-500 px-5 py-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="flex items-center gap-2 text-[14px] font-bold text-white">
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 50 50" fill="none"><circle cx="25" cy="25" r="20" stroke="#1a1f2b" strokeWidth="6"/><path d="M45 25a20 20 0 0 0-20-20" stroke="#22b8f0" strokeWidth="6" strokeLinecap="round"/></svg>
+                AI counting…
+              </span>
+              <button onClick={stopAi} className="text-[12px] text-[#aab2c4] hover:text-white cursor-pointer">Stop</button>
+            </div>
+            {aiLog.slice(-3).map((t, i) => (
+              <div key={i} className="text-[11px] text-[#8a92a6] truncate leading-relaxed">{t}</div>
+            ))}
+          </div>
+        )}
+        {!aiBusy && aiLog.length > 0 && (
+          <p className="text-[11px] text-[#8a92a6] mt-1.5 px-1 leading-snug">{aiLog[aiLog.length - 1]}</p>
         )}
       </div>
 

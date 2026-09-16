@@ -32,6 +32,8 @@ from services.text_service import get_page_text_blocks
 from services.export_service import export_csv
 from services.tile_service import prepare as prepare_tiles, status as tiles_status, TILES_DIR
 from services.vector_match import load_geometry, find_instances, merge_matches
+from services.ai_service import run_ai_count
+from starlette.concurrency import iterate_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from utils.coordinates import SCALE_FACTOR
 
@@ -379,6 +381,21 @@ async def pdf_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.post("/api/ai-count/{pdf_id}")
+async def ai_count(pdf_id: str):
+    """Agentic AI takeoff on one sheet: streams status / item / done events."""
+    try:
+        get_pdf_path(pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
+    async def gen():
+        async for ev in iterate_in_threadpool(run_ai_count(pdf_id)):
+            yield {"event": ev.get("type", "status"), "data": json.dumps(ev)}
+
+    return EventSourceResponse(gen())
 
 
 # --- Deep Zoom tiles ------------------------------------------------------

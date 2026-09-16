@@ -253,3 +253,43 @@ export async function getTilesStatus(pdfId: string): Promise<TilesStatus> {
 export function tileSourceUrl(pdfId: string, variant: 'base' | 'nobg') {
   return `${API_BASE}/tilefiles/${pdfId}/${variant}/image.dzi`;
 }
+
+// --- AI count (agentic takeoff) ---
+export interface AiItem {
+  template_id: string; name: string; thumbnail: string; replaces?: string | null;
+  crop_region: { page: number; x: number; y: number; width: number; height: number };
+  matches: { page: number; x: number; y: number; width: number; height: number; confidence: number }[];
+}
+export function runAiCount(
+  pdfId: string,
+  cb: { onStatus: (text: string) => void; onItem: (item: AiItem) => void;
+        onDone: (summary: string, cost: number, items: number) => void; onError: (err: Error) => void },
+): AbortController {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/ai-count/${pdfId}`, { method: 'POST', signal: controller.signal })
+    .then(async (res) => {
+      if (!res.ok) throw new Error((await res.json().catch(() => ({})) as { detail?: string }).detail || 'AI count failed');
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const raw = line.slice(5).trim();
+          if (!raw) continue;
+          const ev = JSON.parse(raw);
+          if (ev.type === 'status') cb.onStatus(ev.text);
+          else if (ev.type === 'item') cb.onItem(ev);
+          else if (ev.type === 'done') cb.onDone(ev.summary, ev.cost, ev.items);
+          else if (ev.type === 'error') cb.onError(new Error(ev.detail));
+        }
+      }
+    })
+    .catch((err) => { if (err.name !== 'AbortError') cb.onError(err); });
+  return controller;
+}
