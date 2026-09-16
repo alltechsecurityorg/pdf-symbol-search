@@ -316,7 +316,16 @@ export function LegendPanel() {
             key={symbol.id}
             symbol={symbol}
             onToggleVisibility={() => toggleSymbolVisibility(symbol.id)}
-            onDelete={() => { removeSymbol(symbol.id); if (isLegendSheet && ctx) removeLegendItem(ctx.projectId, ctx.takeoffId, ctx.disciplineId, symbol.templateId); }}
+            onDelete={() => {
+              // a legend-backed item re-seeds on every sheet open, so deleting it must
+              // remove it from the discipline legend or it just reappears
+              const inLegend = !!ctx && ctx.legendItems.some((li) => li.templateId === symbol.templateId);
+              if (inLegend) {
+                if (!confirm(`Remove "${symbol.name}" from this discipline's legend? It will disappear from every drawing in the discipline.`)) return;
+                removeLegendItem(ctx!.projectId, ctx!.takeoffId, ctx!.disciplineId, symbol.templateId);
+              }
+              removeSymbol(symbol.id);
+            }}
             onUpdateName={(name) => { updateSymbolName(symbol.id, name); syncLegend(symbol.templateId, { name }); }}
             onUpdateColor={(color) => { updateSymbolColor(symbol.id, color); syncLegend(symbol.templateId, { color }); }}
             onCycleMatch={(matchIndex) => {
