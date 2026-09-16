@@ -525,6 +525,9 @@ def find_instances_full(pdf_id: str, geom: dict, min_score: float = 0.9, max_ext
     review = [r for r in review
               if not any(abs(r["x"] + r["width"] / 2 - (o["x"] + o["width"] / 2)) < max(2.0, o["width"] / 2)
                          and abs(r["y"] + r["height"] / 2 - (o["y"] + o["height"] / 2)) < max(2.0, o["height"] / 2) for o in out)][:60]
+    # a wall of review boxes means the template is too generic - that is noise, not questions
+    if len(review) > 20 and len(review) > 2 * max(len(out), 1):
+        review = []
     logger.info("vector search %s: %d segs (block %d, attrs %d) -> %d matches + %d review in %.2fs",
                 pdf_id, len(T), len(core), len(attrs), len(out), len(review), time.time() - t0)
     return out, review

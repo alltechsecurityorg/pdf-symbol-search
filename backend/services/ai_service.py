@@ -115,28 +115,18 @@ def _snap_box(pdf_id: str, x: float, y: float, w: float, h: float):
         if len(s) < 2 or len(s) > 400:
             return x, y, w, h, False
         comps = _components(np.asarray(s, dtype=np.float64))
-        cx, cy = x + w / 2, y + h / 2
-        best, best_d = None, 1e18
-        for c in comps:
-            xs = np.concatenate([c[:, 0], c[:, 2]]); ys = np.concatenate([c[:, 1], c[:, 3]])
-            bx0, by0, bx1, by1 = xs.min(), ys.min(), xs.max(), ys.max()
-            if bx1 - bx0 < 1.5 or by1 - by0 < 1.5 or bx1 - bx0 > 120 or by1 - by0 > 120:
-                continue
-            d = ((bx0 + bx1) / 2 - cx) ** 2 + ((by0 + by1) / 2 - cy) ** 2
-            if d < best_d:
-                best, best_d = (bx0, by0, bx1, by1), d
-        if best is None:
-            return x, y, w, h, False
-        # merge in any other cluster overlapping the winner (multi-part glyphs)
-        gx0, gy0, gx1, gy1 = best
+        # keep every component whose bbox centre falls inside the model's (padded) box: the
+        # model pointed at the whole symbol, so a multi-part glyph (box + arrow) stays whole
+        gx0 = gy0 = 1e18; gx1 = gy1 = -1e18
         for c in comps:
             xs = np.concatenate([c[:, 0], c[:, 2]]); ys = np.concatenate([c[:, 1], c[:, 3]])
             bx0, by0, bx1, by1 = xs.min(), ys.min(), xs.max(), ys.max()
             if bx1 - bx0 > 120 or by1 - by0 > 120:
                 continue
-            if bx0 < gx1 + 1 and bx1 > gx0 - 1 and by0 < gy1 + 1 and by1 > gy0 - 1:
+            ccx, ccy = (bx0 + bx1) / 2, (by0 + by1) / 2
+            if x - 1 <= ccx <= x + w + 1 and y - 1 <= ccy <= y + h + 1:
                 gx0, gy0, gx1, gy1 = min(gx0, bx0), min(gy0, by0), max(gx1, bx1), max(gy1, by1)
-        if gx1 - gx0 > 120 or gy1 - gy0 > 120:
+        if gx1 < gx0 or gx1 - gx0 < 1.5 or gy1 - gy0 < 1.5 or gx1 - gx0 > 140 or gy1 - gy0 > 140:
             return x, y, w, h, False
         return float(gx0 - 0.7), float(gy0 - 0.7), float(gx1 - gx0 + 1.4), float(gy1 - gy0 + 1.4), True
     except Exception:  # noqa: BLE001
@@ -279,6 +269,11 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
                         tpl = crop_symbol(str(pdf_path), 1, x, y, w, h)
                         geom = load_geometry(tpl["template_id"])
                         n_seg = len(geom.get("seg", [])) if geom else 0
+                        if n_seg < 6:
+                            messages.append({"role": "tool", "tool_call_id": call["id"],
+                                             "content": f"Rejected: the box captured only {n_seg} line segments - that is a fragment, not the whole symbol. Zoom in and box the COMPLETE symbol including all its parts."})
+                            yield {"type": "status", "text": f"Box for '{name}' too small ({n_seg} segments) - asking AI to re-box"}
+                            continue
                         if n_seg > 150:
                             # a symbol is dozens of strokes, not hundreds - this box grabbed the
                             # surroundings, and searching it would take minutes to find only itself

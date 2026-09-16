@@ -79,7 +79,7 @@ export function LegendPanel() {
       onItem: (it) => {
         const st = useAppStore.getState();
         // a re-count of the same name replaces the earlier item (and frees its colour)
-        const old = it.replaces ? st.symbols.find((x) => x.templateId === it.replaces) : st.symbols.find((x) => x.name === it.name && x.matches.length > 0);
+        const old = (it.replaces ? st.symbols.find((x) => x.templateId === it.replaces) : undefined) ?? st.symbols.find((x) => x.name.trim().toLowerCase() === it.name.trim().toLowerCase());
         if (old) removeSymbol(old.id);
         const used = useAppStore.getState().symbols.map((x) => x.color);
         const color = PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[used.length % PRESET_COLORS.length];
