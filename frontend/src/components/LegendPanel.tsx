@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore, type SymbolTemplate } from '../store/appStore';
 import { useProjectStore } from '../store/projectStore';
+import { useShallow } from 'zustand/react/shallow';
 import { v4 as uuidv4 } from 'uuid';
 import { SymbolCard } from './SymbolCard';
 import { runSearchStream, exportResults, saveAnnotatedPdf, runAiCount } from '../api/client';
@@ -27,11 +28,12 @@ export function LegendPanel() {
   const log = (t: string) => setAiLog((l) => [...l.slice(-3), t]);
   // the discipline of the open sheet supplies the legend used across its drawings
   const openPdfId = useProjectStore((s) => s.openPdfId);
-  const ctx = useProjectStore((s) => {
+  const disc = useProjectStore(useShallow((s) => {
     const t = s.projects.find((p) => p.id === s.openProjectId)?.takeoffs.find((x) => x.id === s.openTakeoffId);
     const d = t?.disciplines.find((dd) => dd.pdfs.some((f) => f.pdfId === s.openPdfId));
-    return d ? { projectId: s.openProjectId!, takeoffId: s.openTakeoffId!, disciplineId: d.id, legendPdfId: d.legendPdfId ?? null, legendItems: d.legendItems ?? [] } : null;
-  });
+    return d ? [s.openProjectId!, s.openTakeoffId!, d] as const : null;
+  }));
+  const ctx = disc ? { projectId: disc[0], takeoffId: disc[1], disciplineId: disc[2].id, legendPdfId: disc[2].legendPdfId ?? null, legendItems: disc[2].legendItems ?? [] } : null;
   const legendPdfId = ctx?.legendPdfId ?? null;
   const isLegendSheet = !!ctx && !!openPdfId && ctx.legendPdfId === openPdfId;
   const updateLegendItem = useProjectStore((s) => s.updateLegendItem);

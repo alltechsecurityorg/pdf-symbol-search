@@ -3,6 +3,7 @@ import OpenSeadragon from 'openseadragon';
 import { useAppStore } from '../store/appStore';
 import { cropSymbol, prepareTiles, getTilesStatus, tileSourceUrl, getWords, type TilesStatus } from '../api/client';
 import { useProjectStore } from '../store/projectStore';
+import { useShallow } from 'zustand/react/shallow';
 import { PRESET_COLORS } from './SymbolCard';
 
 // Tiles are rendered at meta.scale x 72 DPI, so image px = PDF pt * scale.
@@ -46,12 +47,13 @@ export function SheetViewer() {
   const modeActive = isCropMode || !!manualModeSymbolId;
 
   // On the discipline's legend sheet, boxed symbols become persistent legend entries
-  const legendCtx = useProjectStore((s) => {
+  const legendTuple = useProjectStore(useShallow((s) => {
     const t = s.projects.find((p) => p.id === s.openProjectId)?.takeoffs.find((x) => x.id === s.openTakeoffId);
     const d = t?.disciplines.find((dd) => dd.pdfs.some((f) => f.pdfId === s.openPdfId));
     return d && d.legendPdfId && d.legendPdfId === s.openPdfId
-      ? { projectId: s.openProjectId!, takeoffId: s.openTakeoffId!, disciplineId: d.id } : null;
-  });
+      ? [s.openProjectId!, s.openTakeoffId!, d.id] as const : null;
+  }));
+  const legendCtx = legendTuple ? { projectId: legendTuple[0], takeoffId: legendTuple[1], disciplineId: legendTuple[2] } : null;
   const addLegendItem = useProjectStore((s) => s.addLegendItem);
 
   // Hold Space to pan temporarily; releasing returns to whatever tool was active (smart select by default).
