@@ -17,7 +17,7 @@ import requests
 
 from services.pdf_service import get_pdf_path, render_clip
 from services.crop_service import crop_symbol
-from services.vector_match import load_geometry, find_instances, load_index, _components
+from services.vector_match import load_geometry, find_instances, find_instances_full, load_index, _components
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,13 @@ Rules:
 SYSTEM_TARGETS = SYSTEM_COMMON + """
 
 Your targets are EXACTLY the reference symbols provided (each with its name and image, possibly cropped
-from a legend or a different sheet). Use each name verbatim in count_symbol."""
+from a legend or a different sheet). Use each name verbatim in count_symbol.
+
+Some targets come with a BASELINE: the exact geometry matcher has already counted them, and those counts
+stand. For such targets your ONLY job is to scan for instances that are DRAWN DIFFERENTLY from the
+reference (a different block style, mirrored/rotated arrangement, heavy overlap) that geometry missed.
+If you find one, box that differently-drawn instance with count_symbol under the same name - its matches
+MERGE into the baseline. If everything you can see is already covered, do not re-count: move on."""
 
 SYSTEM_LEGEND = SYSTEM_COMMON + """
 
@@ -190,16 +196,42 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
     if legend:
         messages.append(_png_msg(_view_png(legend[0], 0, 0, legend[1], legend[2], max_px=1600.0),
                                  f"Overview of the LEGEND sheet. It covers x 0..{legend[1]:.0f}, y 0..{legend[2]:.0f} PDF points (use sheet='legend' in get_view)."))
-    if targets:
-        content = [{"type": "text", "text": f"Count ONLY these {len(targets)} symbol types:"}]
-        for t in targets:
-            content.append({"type": "text", "text": f"Target: {str(t['name'])[:60]}"})
-            content.append({"type": "image_url", "image_url": {"url": t["thumbnail"]}})
-        messages.append({"role": "user", "content": content})
-
+    acc: dict[str, list] = {}  # name -> accumulated matches (baseline + AI-found, deduped)
     total_cost = 0.0
     items = 0
     by_name: dict[str, str] = {}  # name -> template_id, so a re-count replaces the earlier item
+    if targets:
+        content = [{"type": "text", "text": f"Count ONLY these {len(targets)} symbol types:"}]
+        for t in targets:
+            name = str(t["name"])[:60]
+            line = f"Target: {name}"
+            tid = t.get("template_id")
+            if tid:
+                geom = load_geometry(tid)
+                if geom:
+                    try:
+                        base, rev = find_instances_full(pdf_id, geom)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("baseline count failed")
+                        base, rev = [], []
+                    for m in base:
+                        m["page"] = 1
+                    for m in rev:
+                        m["page"] = 1
+                        m["review"] = True
+                    acc[name] = base + rev
+                    items += 1
+                    yield {"type": "item", "template_id": tid, "name": name, "thumbnail": t["thumbnail"],
+                           "crop_region": {"page": 1, "x": geom["box"][0], "y": geom["box"][1], "width": geom["box"][2], "height": geom["box"][3]},
+                           "matches": list(acc[name])}
+                    line += (f" - BASELINE: exact matcher counted {len(base)} confirmed"
+                             + (f" + {len(rev)} uncertain" if rev else "")
+                             + ". Only hunt for instances drawn differently.")
+                    yield {"type": "status", "text": f"Baseline '{name}': {len(base)} counted by exact matcher"}
+            content.append({"type": "text", "text": line})
+            content.append({"type": "image_url", "image_url": {"url": t["thumbnail"]}})
+        messages.append({"role": "user", "content": content})
+
     yield {"type": "status", "text": "AI is studying the sheet…"}
 
     for step in range(MAX_STEPS):
@@ -291,6 +323,16 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
                                        + (" The box contained almost no vector geometry - re-check placement." if segs < 3 else "")
                                        + (" If this count is clearly below what you can see, re-box once, tighter, on a clean instance; otherwise this target is done - do not verify visually." if len(matches) <= 2 else " This target is done."))
                         if matches:
+                            if name in acc:
+                                # merge into the baseline: new matches only where no box exists yet
+                                fresh = [m for m in matches if not any(
+                                    o["x"] <= m["x"] + m["width"] / 2 <= o["x"] + o["width"]
+                                    and o["y"] <= m["y"] + m["height"] / 2 <= o["y"] + o["height"] for o in acc[name])]
+                                acc[name].extend(fresh)
+                                matches = list(acc[name])
+                                result_text += f" Merged: {len(fresh)} new on top of the baseline; total now {len([m for m in matches if not m.get('review')])}."
+                            else:
+                                acc[name] = list(matches)
                             replaces = by_name.get(name)
                             if replaces is None:
                                 items += 1

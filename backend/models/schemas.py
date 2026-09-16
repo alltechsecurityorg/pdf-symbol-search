@@ -105,6 +105,7 @@ class SplitItem(BaseModel):
 class AiTarget(BaseModel):
     name: str
     thumbnail: str  # data URL
+    template_id: str | None = None  # panel items carry their template: the exact matcher runs first
 
 
 class AiCountRequest(BaseModel):

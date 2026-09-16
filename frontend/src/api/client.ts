@@ -262,7 +262,7 @@ export interface AiItem {
 }
 export function runAiCount(
   pdfId: string,
-  targets: { name: string; thumbnail: string }[],
+  targets: { name: string; thumbnail: string; template_id?: string }[],
   legendPdfId: string | null,
   cb: { onStatus: (text: string) => void; onItem: (item: AiItem) => void;
         onDone: (summary: string, cost: number, items: number) => void; onError: (err: Error) => void },

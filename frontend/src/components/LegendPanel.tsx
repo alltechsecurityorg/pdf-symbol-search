@@ -71,7 +71,7 @@ export function LegendPanel() {
     if (!sitePdf || aiBusy) return;
     const all = useAppStore.getState().symbols;
     const checked = all.filter((x) => x.selectedForSearch);
-    const targets = (checked.length > 0 ? checked : all).map((x) => ({ name: x.name, thumbnail: x.thumbnail }));
+    const targets = (checked.length > 0 ? checked : all).map((x) => ({ name: x.name, thumbnail: x.thumbnail, template_id: x.templateId }));
     setAiBusy(true);
     setAiLog([targets.length ? `AI is finding ${checked.length > 0 ? `your ${targets.length} selected` : `all ${targets.length}`} symbol${targets.length === 1 ? '' : 's'}…` : 'Reading the legend…']);
     aiAbort.current = runAiCount(sitePdf.pdfId, targets, legendPdfId && legendPdfId !== sitePdf.pdfId ? legendPdfId : null, {

@@ -378,7 +378,7 @@ def find_instances_full(pdf_id: str, geom: dict, min_score: float = 0.9, max_ext
     t0 = time.time()
     T = np.asarray(geom.get("seg", []), dtype=np.float64).reshape(-1, 4)
     if len(T) < MIN_TEMPLATE_SEGS:
-        return []
+        return [], []
     idx = load_index(pdf_id)
 
     # Permissive pass to discover sibling instances. A cluttered box needs a lower bar, but a
