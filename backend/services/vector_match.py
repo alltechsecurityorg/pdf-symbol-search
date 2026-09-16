@@ -160,6 +160,43 @@ def _has_segment(idx: dict, ax: float, ay: float, bx: float, by: float) -> bool:
     return False
 
 
+def _covered(idx: dict, ax: float, ay: float, bx: float, by: float) -> bool:
+    """Chamfer test: every sample along the segment lies within CHAMFER_TOL of some sheet
+    geometry. Tessellation-independent - rescues curve chords whose arcs the plot driver
+    flattened differently, and edges split where other lines cross them."""
+    CHAMFER_TOL = 1.1
+    L = math.hypot(bx - ax, by - ay)
+    if L < 1e-6:
+        return False
+    n = max(2, int(L / 0.7) + 1)
+    seg, cells = idx["seg"], idx["cells"]
+    t2 = CHAMFER_TOL * CHAMFER_TOL
+    for k in range(n + 1):
+        f = k / n
+        px, py = ax + (bx - ax) * f, ay + (by - ay) * f
+        c0, c1 = int(math.floor(px / CELL)), int(math.floor(py / CELL))
+        ok = False
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for i in cells.get((c0 + dx, c1 + dy), ()):
+                    sg = seg[i]
+                    vx, vy = sg[2] - sg[0], sg[3] - sg[1]
+                    ll = vx * vx + vy * vy
+                    if ll < 1e-12:
+                        dd = (px - sg[0]) ** 2 + (py - sg[1]) ** 2
+                    else:
+                        tt = ((px - sg[0]) * vx + (py - sg[1]) * vy) / ll
+                        tt = 0.0 if tt < 0 else (1.0 if tt > 1 else tt)
+                        dd = (px - (sg[0] + tt * vx)) ** 2 + (py - (sg[1] + tt * vy)) ** 2
+                    if dd <= t2:
+                        ok = True; break
+                if ok: break
+            if ok: break
+        if not ok:
+            return False
+    return True
+
+
 def _hypotheses(idx: dict, T: np.ndarray, min_score: float, n_anchors: int = 3, window=None):
     """Test every placement suggested by up to n_anchors template segments.
     Returns (hits, per-hit matched mask over T) - hits as (score, x0, y0, x1, y1)."""
@@ -387,14 +424,27 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
             logger.info("template: block %d segs, %d attributes (%d segs), %d clutter segs (from %d hits)",
                         len(core), len(attrs), sum(len(a) for a in attrs), n_clutter, len(hits))
 
-    if core is not T or not hits:
-        hits, masks, worlds = _hypotheses(idx, core, min_score)
-        hits, masks, worlds = _dedupe(hits, masks, worlds)
-    else:
-        keep_i = [i for i, h in enumerate(hits) if h[0] >= min_score]
-        hits, masks, worlds = [hits[i] for i in keep_i], [masks[i] for i in keep_i], [worlds[i] for i in keep_i]
+    RESCUE_MIN = 0.55  # exact-segment score floor; near-misses are rescued by chamfer below
+    hits, masks, worlds = _hypotheses(idx, core, RESCUE_MIN)
+    hits, masks, worlds = _dedupe(hits, masks, worlds)
     clen = np.hypot(core[:, 2] - core[:, 0], core[:, 3] - core[:, 1])
     core_len = float(clen.sum())
+
+    # Rescue: a true instance can fail exact endpoint matching on part of its length - arcs
+    # tessellated differently per instance, or edges split where other lines cross. Accept
+    # unmatched segments that chamfer-match the sheet, then rescore.
+    resc = ([], [], [])
+    for (sc, x0, y0, x1, y1), mk, W in zip(hits, masks, worlds):
+        if sc < min_score:
+            mk = mk.copy()
+            for k in np.where(~mk)[0]:
+                if _covered(idx, W[k, 0], W[k, 1], W[k, 2], W[k, 3]):
+                    mk[k] = True
+            sc = float(clen[mk].sum()) / max(core_len, 1e-9)
+            if sc < min_score:
+                continue
+        resc[0].append((sc, x0, y0, x1, y1)); resc[1].append(mk); resc[2].append(W)
+    hits, masks, worlds = resc
     attr_len = float(sum(np.hypot(a[:, 2] - a[:, 0], a[:, 3] - a[:, 1]).sum() for a in attrs))
 
     twords = geom.get("words") or []
@@ -422,7 +472,11 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
             base_extra = extra_at(x0, y0, x1, y1, float(clen[mk].sum()) + attr_len)
             break
     # subset symbols are rejected by attributes now; extra ink is only a backstop
-    eff_extra = max_extra if max_extra is not None else (1.0 if base_extra is None else max(1.0, base_extra + 0.3))
+    # The unexplained-ink gate exists to reject subset matches (a single inside a double) and is
+    # calibrated on the instance the user boxed. A cross-sheet template (cropped on the legend)
+    # has no such instance here - and legend glyphs often lack the drawing's outlined code
+    # letters, making every true match look ink-heavy - so the gate is skipped entirely.
+    eff_extra = max_extra if max_extra is not None else (float("inf") if base_extra is None else max(1.0, base_extra + 0.3))
 
     def interior_miss(mk, W, x0, y0, x1, y1) -> float:
         """Unmatched core length sitting well inside the matched box - a true CAD block only
@@ -447,7 +501,10 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
         words_ok = True
         if twords:
             ws = sorted(str(wd[4]).lower() for wd in idx["words"] if wd[0] >= x0 - 1 and wd[2] <= x1 + 1 and wd[1] >= y0 - 1 and wd[3] <= y1 + 1)
-            words_ok = ws == twords
+            # Only enforce when the candidate actually has text: a template cropped on a sheet
+            # with a text layer must still match drawings whose codes are outlined vectors
+            # (the letters are matched as geometry there).
+            words_ok = (ws == twords) if ws else True
         gate = "ok" if (a_sc >= 1.0 and extra <= eff_extra and imiss <= 0.04 and words_ok) else ("attr" if a_sc < 1.0 else ("imiss" if imiss > 0.04 else ("extra" if extra > eff_extra else "words")))
         dbg["cands"].append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "core": round(sc, 2), "attr": round(a_sc, 2), "extra": round(extra, 2), "imiss": round(imiss, 2), "gate": gate})
         if gate != "ok":
