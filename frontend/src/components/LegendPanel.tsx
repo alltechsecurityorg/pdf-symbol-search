@@ -4,7 +4,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { v4 as uuidv4 } from 'uuid';
 import { SymbolCard } from './SymbolCard';
-import { runSearchStream, exportResults, saveAnnotatedPdf, runAiCount } from '../api/client';
+import { runSearchStream, exportResults, saveAnnotatedPdf, runAiCount, kvGet, kvPutDebounced } from '../api/client';
 import { PRESET_COLORS } from './SymbolCard';
 
 export function LegendPanel() {
@@ -47,20 +47,45 @@ export function LegendPanel() {
   const removeLegendItem = useProjectStore((s) => s.removeLegendItem);
   const setSymbols = useAppStore((s) => s.setSymbols);
 
-  // Opening a sheet seeds the working set from the discipline's legend: on the legend sheet the
-  // entries are shown for editing (no counting); on a drawing they arrive uncounted, so the
-  // auto-counter runs each of them against this sheet.
+  // Opening a sheet restores its saved takeoff (counts included) from the server; without one
+  // it seeds from the discipline's legend. Legend items added since the save are appended.
+  // The legend sheet itself always mirrors the legend (fresh seed, never saved).
   const seededFor = useRef<string | null>(null);
   useEffect(() => {
     if (!openPdfId || !ctx || seededFor.current === openPdfId) return;
-    if (ctx.legendItems.length === 0 && !isLegendSheet) return;
     seededFor.current = openPdfId;
-    setSymbols(ctx.legendItems.map((li) => ({
+    const seedOf = (li: (typeof ctx.legendItems)[number]) => ({
       id: uuidv4(), name: li.name, color: li.color, thumbnail: li.thumbnail, templateId: li.templateId,
       cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: false, queued: false, variants: li.variants ?? [],
-    })));
+    });
+    let cancelled = false;
+    (async () => {
+      if (!isLegendSheet) {
+        const raw = await kvGet(`sheet-${openPdfId}`);
+        if (cancelled) return;
+        if (raw) {
+          try {
+            const saved = JSON.parse(raw) as SymbolTemplate[];
+            const have = new Set(saved.map((x) => x.templateId));
+            const extra = ctx.legendItems.filter((li) => !have.has(li.templateId)).map(seedOf);
+            setSymbols([...saved.map((x) => ({ ...x, queued: false })), ...extra]);
+            return;
+          } catch { /* fall through to seeding */ }
+        }
+      }
+      if (ctx.legendItems.length > 0 || isLegendSheet) setSymbols(ctx.legendItems.map(seedOf));
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openPdfId, isLegendSheet]);
+
+  // Autosave the working set (items, variants, counts, confirmations) per sheet.
+  useEffect(() => {
+    if (!openPdfId || isLegendSheet || seededFor.current !== openPdfId) return;
+    if (pdfLoading) return;
+    kvPutDebounced(`sheet-${openPdfId}`, JSON.stringify(symbols), 800);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbols, openPdfId, isLegendSheet]);
 
   // edits made while on the legend sheet write through to the discipline's legend
   const syncLegend = (templateId: string, patch: { name?: string; color?: string }) => {

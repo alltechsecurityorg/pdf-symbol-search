@@ -3,7 +3,8 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+import os
 
 logging.basicConfig(level=logging.INFO)
 from fastapi.middleware.cors import CORSMiddleware
@@ -431,6 +432,37 @@ async def ai_count(pdf_id: str, request: AiCountRequest | None = None):
             yield {"event": ev.get("type", "status"), "data": json.dumps(ev)}
 
     return EventSourceResponse(gen())
+
+
+import re as _re
+from pathlib import Path as _Path
+
+_STATE_DIR = _Path(os.environ.get("DATA_DIR", "/tmp/pdf-symbol-search")) / "state"
+_STATE_DIR.mkdir(parents=True, exist_ok=True)
+_KV_KEY = _re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+
+
+@app.get("/api/kv/{key}")
+async def kv_get(key: str):
+    if not _KV_KEY.match(key):
+        raise HTTPException(status_code=400, detail="bad key")
+    path = _STATE_DIR / f"{key}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="not found")
+    return Response(content=path.read_bytes(), media_type="application/json")
+
+
+@app.put("/api/kv/{key}")
+async def kv_put(key: str, request: Request):
+    if not _KV_KEY.match(key):
+        raise HTTPException(status_code=400, detail="bad key")
+    body = await request.body()
+    if len(body) > 20_000_000:
+        raise HTTPException(status_code=413, detail="too large")
+    tmp = _STATE_DIR / f"{key}.tmp"
+    tmp.write_bytes(body)
+    tmp.rename(_STATE_DIR / f"{key}.json")
+    return {"ok": True}
 
 
 @app.post("/api/export-yolo")

@@ -319,3 +319,18 @@ export async function extractLegend(pdfId: string, x: number, y: number, width: 
   if (!res.ok) throw new Error('Legend extraction failed');
   return ((await res.json()) as { items: LegendEntry[] }).items;
 }
+
+// --- server-side state (KV on the backend data volume) ---
+export async function kvGet(key: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${API_BASE}/kv/${key}`);
+    return r.ok ? await r.text() : null;
+  } catch { return null; }
+}
+const kvTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+export function kvPutDebounced(key: string, value: string, ms = 500) {
+  clearTimeout(kvTimers[key]);
+  kvTimers[key] = setTimeout(() => {
+    fetch(`${API_BASE}/kv/${key}`, { method: 'PUT', body: value }).catch(() => undefined);
+  }, ms);
+}

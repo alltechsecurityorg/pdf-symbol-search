@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
+import { kvGet, kvPutDebounced } from '../api/client';
 import { v4 as uuidv4 } from 'uuid';
 
 export type ProjectStatus = 'Takeoff' | 'Quoting' | 'Won' | 'Lost' | 'On hold';
@@ -99,6 +100,28 @@ interface ProjectState {
 const updTakeoff = (projects: Project[], projectId: string, takeoffId: string, fn: (t: Takeoff) => Takeoff) =>
   projects.map((p) => p.id !== projectId ? p : { ...p, takeoffs: p.takeoffs.map((t) => (t.id !== takeoffId ? t : fn(t))) });
 
+// Server-first storage: the project tree lives on the backend volume so it survives
+// browser changes and is shared across machines; localStorage is kept as a fallback and
+// is migrated to the server the first time it is the only copy.
+const serverStorage: StateStorage = {
+  getItem: async (name) => {
+    const remote = await kvGet(name);
+    if (remote != null) return remote;
+    try {
+      const local = localStorage.getItem(name);
+      if (local != null) kvPutDebounced(name, local, 10); // migrate
+      return local;
+    } catch { return null; }
+  },
+  setItem: (name, value) => {
+    try { localStorage.setItem(name, value); } catch { /* full/blocked is fine */ }
+    kvPutDebounced(name, value);
+  },
+  removeItem: (name) => {
+    try { localStorage.removeItem(name); } catch { /* ignore */ }
+  },
+};
+
 export const useProjectStore = create<ProjectState>()(
   persist(
     (set) => ({
@@ -197,6 +220,7 @@ export const useProjectStore = create<ProjectState>()(
     {
       name: 'pss-projects',
       version: 3,
+      storage: createJSONStorage(() => serverStorage),
       partialize: (s) => ({ projects: s.projects }),
       // Older saves: add takeoffs (v1) and revision/disciplines on takeoffs (v2)
       migrate: (persisted) => {
