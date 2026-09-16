@@ -1,9 +1,13 @@
 @import "tailwindcss";
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* Keep this reset inside the base layer: an unlayered `*` rule outranks every
+   Tailwind utility (utilities live in @layer), which zeroed all p-*/m-* classes. */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 }
 
 html, body, #root {
