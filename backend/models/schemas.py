@@ -82,3 +82,21 @@ class AnnotationSymbol(BaseModel):
 class AnnotateRequest(BaseModel):
     pdf_id: str
     symbols: list[AnnotationSymbol]
+
+
+class PageInfo(BaseModel):
+    page: int
+    name: str
+
+
+class SplitRequest(BaseModel):
+    pdf_id: str
+    pages: list[int]
+
+
+class SplitItem(BaseModel):
+    page: int
+    pdf_id: str
+    filename: str
+    page_count: int
+    page_sizes: list[dict]
