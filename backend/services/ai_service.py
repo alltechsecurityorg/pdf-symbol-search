@@ -278,6 +278,15 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
                         x, y, w, h, snapped = _snap_box(pdf_id, x, y, w, h)
                         tpl = crop_symbol(str(pdf_path), 1, x, y, w, h)
                         geom = load_geometry(tpl["template_id"])
+                        n_seg = len(geom.get("seg", [])) if geom else 0
+                        if n_seg > 150:
+                            # a symbol is dozens of strokes, not hundreds - this box grabbed the
+                            # surroundings, and searching it would take minutes to find only itself
+                            messages_note = (f"Rejected: the box captured {n_seg} line segments - far too much for one "
+                                             "symbol. Zoom in closer and box ONLY the symbol, tightly.")
+                            messages.append({"role": "tool", "tool_call_id": call["id"], "content": messages_note})
+                            yield {"type": "status", "text": f"Box for '{name}' too loose ({n_seg} segments) - asking AI to re-box"}
+                            continue
                         matches = find_instances(pdf_id, geom) if geom else []
                         for m in matches:
                             m["page"] = 1
