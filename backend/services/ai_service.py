@@ -10,18 +10,22 @@ import base64
 import json
 import logging
 import os
+import time
 
 import fitz
 import requests
 
 from services.pdf_service import get_pdf_path, render_clip
 from services.crop_service import crop_symbol
-from services.vector_match import load_geometry, find_instances
+from services.vector_match import load_geometry, find_instances, load_index, _components
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 API = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = os.environ.get("AI_MODEL", "openai/gpt-6-astra")
+REASONING = os.environ.get("AI_REASONING", "low")
+MAX_IMAGES_KEPT = 4  # older views are pruned from the conversation to keep calls fast
 COST_CAP = float(os.environ.get("AI_COST_CAP", "2.0"))
 MAX_STEPS = int(os.environ.get("AI_MAX_STEPS", "24"))
 
@@ -61,10 +65,14 @@ Method (follow strictly):
 Rules:
 - All coordinates are PDF points, origin top-left, y increases downward. Every view's caption tells you
   the exact region it covers - derive coordinates from that.
-- Never estimate counts visually; only count_symbol counts.
+- count_symbol is EXHAUSTIVE and AUTHORITATIVE for the entire sheet. Once it returns, that target is
+  DONE - never scan the sheet to visually verify or find more instances. The only reason to revisit a
+  target is a clearly wrong count (e.g. 1 when you can see several): then re-box ONCE, tighter, on a
+  clean instance, and accept the second result.
+- Budget: at most 2 views per target before counting it. Never estimate counts visually.
 - Box instances from the drawing area, never the legend's own sample symbols.
 - Count ONLY the target symbol types. Do not add other symbols you happen to notice.
-- Be economical: few, purposeful views."""
+- When every target has a count, call finish immediately."""
 
 SYSTEM_TARGETS = SYSTEM_COMMON + """
 
@@ -92,12 +100,74 @@ def _png_msg(png: bytes, caption: str) -> dict:
     ]}
 
 
-def _view_png(pdf_id: str, x: float, y: float, w: float, h: float) -> bytes:
-    z = max(1.0, min(48.0, 1200.0 / max(w, h, 1e-6)))
+def _snap_box(pdf_id: str, x: float, y: float, w: float, h: float):
+    """Snap a rough box to the tight bbox of the geometry cluster nearest its centre.
+    Vision models point well but box poorly; the sheet's own vectors know the exact extent."""
+    try:
+        idx = load_index(pdf_id)
+        seg = idx["seg"]
+        ln = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+        pad = 0.35 * max(w, h)
+        m = ((ln <= 60)
+             & (np.minimum(seg[:, 0], seg[:, 2]) >= x - pad) & (np.maximum(seg[:, 0], seg[:, 2]) <= x + w + pad)
+             & (np.minimum(seg[:, 1], seg[:, 3]) >= y - pad) & (np.maximum(seg[:, 1], seg[:, 3]) <= y + h + pad))
+        s = seg[m]
+        if len(s) < 2 or len(s) > 400:
+            return x, y, w, h, False
+        comps = _components(np.asarray(s, dtype=np.float64))
+        cx, cy = x + w / 2, y + h / 2
+        best, best_d = None, 1e18
+        for c in comps:
+            xs = np.concatenate([c[:, 0], c[:, 2]]); ys = np.concatenate([c[:, 1], c[:, 3]])
+            bx0, by0, bx1, by1 = xs.min(), ys.min(), xs.max(), ys.max()
+            if bx1 - bx0 < 1.5 or by1 - by0 < 1.5 or bx1 - bx0 > 120 or by1 - by0 > 120:
+                continue
+            d = ((bx0 + bx1) / 2 - cx) ** 2 + ((by0 + by1) / 2 - cy) ** 2
+            if d < best_d:
+                best, best_d = (bx0, by0, bx1, by1), d
+        if best is None:
+            return x, y, w, h, False
+        # merge in any other cluster overlapping the winner (multi-part glyphs)
+        gx0, gy0, gx1, gy1 = best
+        for c in comps:
+            xs = np.concatenate([c[:, 0], c[:, 2]]); ys = np.concatenate([c[:, 1], c[:, 3]])
+            bx0, by0, bx1, by1 = xs.min(), ys.min(), xs.max(), ys.max()
+            if bx1 - bx0 > 120 or by1 - by0 > 120:
+                continue
+            if bx0 < gx1 + 1 and bx1 > gx0 - 1 and by0 < gy1 + 1 and by1 > gy0 - 1:
+                gx0, gy0, gx1, gy1 = min(gx0, bx0), min(gy0, by0), max(gx1, bx1), max(gy1, by1)
+        if gx1 - gx0 > 120 or gy1 - gy0 > 120:
+            return x, y, w, h, False
+        return float(gx0 - 0.7), float(gy0 - 0.7), float(gx1 - gx0 + 1.4), float(gy1 - gy0 + 1.4), True
+    except Exception:  # noqa: BLE001
+        logger.exception("snap failed")
+        return x, y, w, h, False
+
+
+def _view_png(pdf_id: str, x: float, y: float, w: float, h: float, max_px: float = 1200.0) -> bytes:
+    z = max(0.3, min(48.0, max_px / max(w, h, 1e-6)))
     return render_clip(pdf_id, x, y, w, h, z, pad=1.0)
 
 
-def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | None = None):
+def _prune_images(messages: list) -> None:
+    """Keep only the newest MAX_IMAGES_KEPT view images (the two overviews at the start are
+    always kept); older ones become a text stub. The API is stateless - everything is re-sent
+    and re-processed each call, so stale megapixel views dominate latency and cost."""
+    keep_head = 3  # system + drawing overview + optional legend overview / targets
+    seen = 0
+    for msg in reversed(messages[keep_head:]):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if part.get("type") == "image_url":
+                seen += 1
+                if seen > MAX_IMAGES_KEPT:
+                    part.clear()
+                    part.update({"type": "text", "text": "[an older view was removed - request it again if needed]"})
+
+
+def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | None = None, model: str | None = None):
     """Generator of event dicts: status / item / done / error.
 
     targets: [{name, thumbnail(data URL)}] restricts the run to those symbols;
@@ -112,7 +182,7 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
     doc.close()
     W, H = rect.width, rect.height
 
-    overview = _view_png(pdf_id, 0, 0, W, H)
+    overview = _view_png(pdf_id, 0, 0, W, H, max_px=1400.0)
     targets = [t for t in (targets or []) if t.get("name") and t.get("thumbnail")]
     legend = None  # (pdf_id, W, H)
     if not targets and legend_pdf_id and legend_pdf_id != pdf_id:
@@ -126,7 +196,7 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
         _png_msg(overview, f"Overview of the DRAWING sheet. It covers x 0..{W:.0f}, y 0..{H:.0f} PDF points."),
     ]
     if legend:
-        messages.append(_png_msg(_view_png(legend[0], 0, 0, legend[1], legend[2]),
+        messages.append(_png_msg(_view_png(legend[0], 0, 0, legend[1], legend[2], max_px=1600.0),
                                  f"Overview of the LEGEND sheet. It covers x 0..{legend[1]:.0f}, y 0..{legend[2]:.0f} PDF points (use sheet='legend' in get_view)."))
     if targets:
         content = [{"type": "text", "text": f"Count ONLY these {len(targets)} symbol types:"}]
@@ -141,11 +211,13 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
     yield {"type": "status", "text": "AI is studying the sheet…"}
 
     for step in range(MAX_STEPS):
+        _prune_images(messages)
+        t_call = time.time()
         try:
             r = requests.post(API, timeout=300,
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": MODEL, "messages": messages, "tools": TOOLS,
-                      "reasoning": {"effort": "medium"}, "usage": {"include": True},
+                json={"model": model or MODEL, "messages": messages, "tools": TOOLS,
+                      "reasoning": {"effort": REASONING}, "usage": {"include": True},
                       "max_tokens": 4000})
             data = r.json()
         except Exception as e:  # noqa: BLE001
@@ -154,7 +226,9 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
         if "error" in data:
             yield {"type": "error", "detail": str(data["error"])[:300]}
             return
-        total_cost += float(data.get("usage", {}).get("cost") or 0)
+        u = data.get("usage", {})
+        total_cost += float(u.get("cost") or 0)
+        logger.info("ai step %d: %.1fs, in=%s out=%s, run cost $%.3f", step + 1, time.time() - t_call, u.get("prompt_tokens"), u.get("completion_tokens"), total_cost)
         msg = data["choices"][0]["message"]
         messages.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls") and v is not None})
 
@@ -195,18 +269,21 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
                 name = str(args.get("name") or "Unnamed item")[:60]
                 x, y = float(args["x"]), float(args["y"])
                 w, h = float(args["w"]), float(args["h"])
-                if w < 2 or h < 2 or w > 120 or h > 120:
-                    result_text = "Rejected: symbol box must be between 2 and 120 pt per side, tightly around one instance."
+                if w < 2 or h < 2 or w > 160 or h > 160:
+                    result_text = "Rejected: symbol box must be between 2 and 160 pt per side, around one instance."
                 else:
                     try:
+                        x, y, w, h, snapped = _snap_box(pdf_id, x, y, w, h)
                         tpl = crop_symbol(str(pdf_path), 1, x, y, w, h)
                         geom = load_geometry(tpl["template_id"])
                         matches = find_instances(pdf_id, geom) if geom else []
                         for m in matches:
                             m["page"] = 1
                         segs = len(geom.get("seg", [])) if geom else 0
-                        result_text = (f"'{name}': {len(matches)} instances found (template geometry: {segs} segments)."
-                                       + (" The box contained almost no vector geometry - re-check placement." if segs < 3 else ""))
+                        result_text = ((f"(box snapped to the symbol: {w:.1f}x{h:.1f}pt at {x:.1f},{y:.1f}) " if snapped else "")
+                                       + f"'{name}': {len(matches)} instances found across the ENTIRE sheet (exhaustive; template geometry: {segs} segments)."
+                                       + (" The box contained almost no vector geometry - re-check placement." if segs < 3 else "")
+                                       + (" If this count is clearly below what you can see, re-box once, tighter, on a clean instance; otherwise this target is done - do not verify visually." if len(matches) <= 2 else " This target is done."))
                         if matches:
                             replaces = by_name.get(name)
                             if replaces is None:

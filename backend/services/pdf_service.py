@@ -250,7 +250,7 @@ def whiten_grey(pm):
 
 def render_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float, pad: float, nobg: bool = False) -> bytes:
     """PNG of the rect [x,y,w,h] (pt, padded by `pad` pt) rendered at `z` px per pt."""
-    z = max(1.0, min(48.0, z))
+    z = max(0.3, min(48.0, z))
     rect = fitz.Rect(x - pad, y - pad, x + w + pad, y + h + pad)
     if rect.width * z * rect.height * z > 6_000_000:
         raise ValueError("clip too large")
