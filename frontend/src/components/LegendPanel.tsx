@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore, type SymbolTemplate } from '../store/appStore';
 import { useProjectStore } from '../store/projectStore';
+import { v4 as uuidv4 } from 'uuid';
 import { SymbolCard } from './SymbolCard';
 import { runSearchStream, exportResults, saveAnnotatedPdf, runAiCount } from '../api/client';
 import { PRESET_COLORS } from './SymbolCard';
@@ -25,11 +26,37 @@ export function LegendPanel() {
   const aiAbort = useRef<AbortController | null>(null);
   const log = (t: string) => setAiLog((l) => [...l.slice(-3), t]);
   // the discipline of the open sheet supplies the legend used across its drawings
-  const legendPdfId = useProjectStore((s) => {
+  const openPdfId = useProjectStore((s) => s.openPdfId);
+  const ctx = useProjectStore((s) => {
     const t = s.projects.find((p) => p.id === s.openProjectId)?.takeoffs.find((x) => x.id === s.openTakeoffId);
     const d = t?.disciplines.find((dd) => dd.pdfs.some((f) => f.pdfId === s.openPdfId));
-    return d?.legendPdfId ?? null;
+    return d ? { projectId: s.openProjectId!, takeoffId: s.openTakeoffId!, disciplineId: d.id, legendPdfId: d.legendPdfId ?? null, legendItems: d.legendItems ?? [] } : null;
   });
+  const legendPdfId = ctx?.legendPdfId ?? null;
+  const isLegendSheet = !!ctx && !!openPdfId && ctx.legendPdfId === openPdfId;
+  const updateLegendItem = useProjectStore((s) => s.updateLegendItem);
+  const removeLegendItem = useProjectStore((s) => s.removeLegendItem);
+  const setSymbols = useAppStore((s) => s.setSymbols);
+
+  // Opening a sheet seeds the working set from the discipline's legend: on the legend sheet the
+  // entries are shown for editing (no counting); on a drawing they arrive uncounted, so the
+  // auto-counter runs each of them against this sheet.
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openPdfId || !ctx || seededFor.current === openPdfId) return;
+    if (ctx.legendItems.length === 0 && !isLegendSheet) return;
+    seededFor.current = openPdfId;
+    setSymbols(ctx.legendItems.map((li) => ({
+      id: uuidv4(), name: li.name, color: li.color, thumbnail: li.thumbnail, templateId: li.templateId,
+      cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: !isLegendSheet,
+    })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPdfId, isLegendSheet]);
+
+  // edits made while on the legend sheet write through to the discipline's legend
+  const syncLegend = (templateId: string, patch: { name?: string; color?: string }) => {
+    if (isLegendSheet && ctx) updateLegendItem(ctx.projectId, ctx.takeoffId, ctx.disciplineId, templateId, patch);
+  };
 
   const startAi = () => {
     if (!sitePdf || aiBusy) return;
@@ -102,6 +129,7 @@ export function LegendPanel() {
 
   // Auto-count: anything new (or reset via re-count) gets counted as soon as the engine is free.
   useEffect(() => {
+    if (isLegendSheet) return; // the legend sheet is for defining symbols, not counting them
     if (isSearching || pdfLoading || !sitePdf) return;
     const pending = symbols.filter((s) => s.selectedForSearch && !s.searched);
     if (pending.length > 0) runCount(pending);
@@ -165,15 +193,15 @@ export function LegendPanel() {
               <path d="M31 24v14M24 31h14" stroke="#fff" strokeWidth="1.6"/>
             </svg>
             <div>
-              <div className="text-[15px] font-bold text-white">Auto-count items</div>
-              <div className="text-[13px] text-[#d5dbe6] mt-1 leading-snug">Drag a box over an item to count it across all your drawings.</div>
+              <div className="text-[15px] font-bold text-white">{isLegendSheet ? 'Build the legend' : 'Auto-count items'}</div>
+              <div className="text-[13px] text-[#d5dbe6] mt-1 leading-snug">{isLegendSheet ? 'Drag a box over each symbol in the legend. They become the symbol set for every drawing in this discipline.' : 'Drag a box over an item to count it across all your drawings.'}</div>
               <div className="text-[12px] text-[#8a92a6] mt-1.5">{isCropMode ? 'Smart select is on — hold Space and drag to move around.' : 'Smart select is off — click to turn it on.'}</div>
             </div>
           </button>
         )}
       </div>
 
-      <div className="px-4 pb-2">
+      <div className="px-4 pb-2" hidden={isLegendSheet}>
         {!aiBusy ? (
           <button
             onClick={startAi}
@@ -228,9 +256,9 @@ export function LegendPanel() {
             key={symbol.id}
             symbol={symbol}
             onToggleVisibility={() => toggleSymbolVisibility(symbol.id)}
-            onDelete={() => removeSymbol(symbol.id)}
-            onUpdateName={(name) => updateSymbolName(symbol.id, name)}
-            onUpdateColor={(color) => updateSymbolColor(symbol.id, color)}
+            onDelete={() => { removeSymbol(symbol.id); if (isLegendSheet && ctx) removeLegendItem(ctx.projectId, ctx.takeoffId, ctx.disciplineId, symbol.templateId); }}
+            onUpdateName={(name) => { updateSymbolName(symbol.id, name); syncLegend(symbol.templateId, { name }); }}
+            onUpdateColor={(color) => { updateSymbolColor(symbol.id, color); syncLegend(symbol.templateId, { color }); }}
             onCycleMatch={(matchIndex) => {
               const match = symbol.matches[matchIndex];
               if (match) {

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import OpenSeadragon from 'openseadragon';
 import { useAppStore } from '../store/appStore';
-import { cropSymbol, prepareTiles, getTilesStatus, tileSourceUrl, type TilesStatus } from '../api/client';
+import { cropSymbol, prepareTiles, getTilesStatus, tileSourceUrl, getWords, type TilesStatus } from '../api/client';
+import { useProjectStore } from '../store/projectStore';
 import { PRESET_COLORS } from './SymbolCard';
 
 // Tiles are rendered at meta.scale x 72 DPI, so image px = PDF pt * scale.
@@ -16,6 +17,7 @@ export function SheetViewer() {
   const manualModeSymbolId = useAppStore((s) => s.manualModeSymbolId);
   const setManualModeSymbolId = useAppStore((s) => s.setManualModeSymbolId);
   const addSymbol = useAppStore((s) => s.addSymbol);
+  const addCountedSymbol = useAppStore((s) => s.addCountedSymbol);
   const addManualMatch = useAppStore((s) => s.addManualMatch);
   const removeMatch = useAppStore((s) => s.removeMatch);
   const undo = useAppStore((s) => s.undo);
@@ -42,6 +44,15 @@ export function SheetViewer() {
 
   const pdfId = sitePdf?.pdfId ?? null;
   const modeActive = isCropMode || !!manualModeSymbolId;
+
+  // On the discipline's legend sheet, boxed symbols become persistent legend entries
+  const legendCtx = useProjectStore((s) => {
+    const t = s.projects.find((p) => p.id === s.openProjectId)?.takeoffs.find((x) => x.id === s.openTakeoffId);
+    const d = t?.disciplines.find((dd) => dd.pdfs.some((f) => f.pdfId === s.openPdfId));
+    return d && d.legendPdfId && d.legendPdfId === s.openPdfId
+      ? { projectId: s.openProjectId!, takeoffId: s.openTakeoffId!, disciplineId: d.id } : null;
+  });
+  const addLegendItem = useProjectStore((s) => s.addLegendItem);
 
   // Hold Space to pan temporarily; releasing returns to whatever tool was active (smart select by default).
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -363,12 +374,26 @@ export function SheetViewer() {
       if (width < 3 || height < 3) return;
       try {
         const r = await cropSymbol({ pdf_id: pdfId, page: 1, x, y, width, height });
-        // Straight into the panel: next unused colour, placeholder name (rename inline on the card).
         const existing = useAppStore.getState().symbols;
         const used = existing.map((s) => s.color);
         const color = PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[existing.length % PRESET_COLORS.length];
-        const unnamed = existing.filter((s) => /^Unnamed item( \d+)?$/.test(s.name)).length;
-        addSymbol({ name: unnamed === 0 ? 'Unnamed item' : `Unnamed item ${unnamed + 1}`, color, thumbnail: r.thumbnail_base64, templateId: r.template_id, cropRegion: { page: 1, x, y, width, height } });
+        let name = '';
+        if (legendCtx) {
+          // legend rows put the description to the right of the symbol - use it as the name
+          const words = await getWords(pdfId, x + width, y - 2, x + width + 260, y + height + 2).catch(() => []);
+          name = words.join(' ').trim().slice(0, 60);
+        }
+        if (!name) {
+          const unnamed = existing.filter((s) => /^Unnamed item( \d+)?$/.test(s.name)).length;
+          name = unnamed === 0 ? 'Unnamed item' : `Unnamed item ${unnamed + 1}`;
+        }
+        if (legendCtx) {
+          addCountedSymbol({ name, color, thumbnail: r.thumbnail_base64, templateId: r.template_id, cropRegion: { page: 1, x, y, width, height }, matches: [] });
+          addLegendItem(legendCtx.projectId, legendCtx.takeoffId, legendCtx.disciplineId,
+            { name, color, thumbnail: r.thumbnail_base64, templateId: r.template_id, cropRegion: { page: 1, x, y, width, height } });
+        } else {
+          addSymbol({ name, color, thumbnail: r.thumbnail_base64, templateId: r.template_id, cropRegion: { page: 1, x, y, width, height } });
+        }
       } catch (err) { alert(err instanceof Error ? err.message : 'Failed to crop item'); }
     } else if (manualModeSymbolId) {
       const p = elPos(e); const pt = elToPt(p.x, p.y);

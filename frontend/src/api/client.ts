@@ -299,3 +299,10 @@ export function runAiCount(
     .catch((err) => { if (err.name !== 'AbortError') cb.onError(err); });
   return controller;
 }
+
+export async function getWords(pdfId: string, x0: number, y0: number, x1: number, y1: number): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/pdf/${pdfId}/words?x0=${x0}&y0=${y0}&x1=${x1}&y1=${y1}`);
+  if (!res.ok) return [];
+  const d = await res.json() as { words: { text: string }[] };
+  return d.words.map((w) => w.text);
+}

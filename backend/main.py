@@ -407,6 +407,24 @@ async def ai_count(pdf_id: str, request: AiCountRequest | None = None):
     return EventSourceResponse(gen())
 
 
+@app.get("/api/pdf/{pdf_id}/words")
+async def pdf_words(pdf_id: str, x0: float, y0: float, x1: float, y1: float):
+    """Text words whose boxes fall inside the rect - used to prefill legend entry names."""
+    try:
+        get_pdf_path(pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    from services.vector_match import load_index
+    idx = await run_in_thread(load_index, pdf_id)
+    words = [
+        {"x0": w[0], "y0": w[1], "x1": w[2], "y1": w[3], "text": w[4]}
+        for w in idx["words"]
+        if w[0] >= x0 and w[2] <= x1 and w[1] >= y0 - 1 and w[3] <= y1 + 1
+    ]
+    words.sort(key=lambda w: (round(w["y0"]), w["x0"]))
+    return {"words": words}
+
+
 # --- Deep Zoom tiles ------------------------------------------------------
 
 @app.post("/api/tiles/{pdf_id}/prepare")

@@ -15,7 +15,15 @@ export interface TakeoffPdf {
   sourcePdfId?: string; // multi-page upload this sheet was split from
   sourcePage?: number;
 }
-export interface Discipline { id: string; name: string; pdfs: TakeoffPdf[]; legendPdfId?: string | null }
+export interface LegendItem {
+  id: string;
+  name: string;
+  color: string;
+  thumbnail: string;
+  templateId: string;
+  cropRegion: { page: number; x: number; y: number; width: number; height: number };
+}
+export interface Discipline { id: string; name: string; pdfs: TakeoffPdf[]; legendPdfId?: string | null; legendItems?: LegendItem[] }
 export interface Takeoff { id: string; name: string; revision: number; created: string; disciplines: Discipline[] }
 
 export interface Project {
@@ -70,6 +78,9 @@ interface ProjectState {
   deleteDiscipline: (projectId: string, takeoffId: string, disciplineId: string) => void;
   addPdf: (projectId: string, takeoffId: string, disciplineId: string, pdf: TakeoffPdf) => void;
   setLegend: (projectId: string, takeoffId: string, disciplineId: string, pdfId: string | null) => void;
+  addLegendItem: (projectId: string, takeoffId: string, disciplineId: string, item: Omit<LegendItem, 'id'>) => void;
+  updateLegendItem: (projectId: string, takeoffId: string, disciplineId: string, templateId: string, patch: Partial<Pick<LegendItem, 'name' | 'color'>>) => void;
+  removeLegendItem: (projectId: string, takeoffId: string, disciplineId: string, templateId: string) => void;
   deletePdf: (projectId: string, takeoffId: string, disciplineId: string, pdfId: string) => void;
 
   openProject: (id: string) => void;
@@ -148,6 +159,20 @@ export const useProjectStore = create<ProjectState>()(
       setLegend: (projectId, takeoffId, disciplineId, pdfId) =>
         set((s) => ({ projects: updTakeoff(s.projects, projectId, takeoffId, (t) => ({
           ...t, disciplines: t.disciplines.map((d) => (d.id === disciplineId ? { ...d, legendPdfId: pdfId } : d)),
+        })) })),
+      addLegendItem: (projectId, takeoffId, disciplineId, item) =>
+        set((s) => ({ projects: updTakeoff(s.projects, projectId, takeoffId, (t) => ({
+          ...t, disciplines: t.disciplines.map((d) => (d.id === disciplineId ? { ...d, legendItems: [...(d.legendItems ?? []), { ...item, id: uuidv4() }] } : d)),
+        })) })),
+      updateLegendItem: (projectId, takeoffId, disciplineId, templateId, patch) =>
+        set((s) => ({ projects: updTakeoff(s.projects, projectId, takeoffId, (t) => ({
+          ...t, disciplines: t.disciplines.map((d) => (d.id === disciplineId
+            ? { ...d, legendItems: (d.legendItems ?? []).map((i) => (i.templateId === templateId ? { ...i, ...patch } : i)) } : d)),
+        })) })),
+      removeLegendItem: (projectId, takeoffId, disciplineId, templateId) =>
+        set((s) => ({ projects: updTakeoff(s.projects, projectId, takeoffId, (t) => ({
+          ...t, disciplines: t.disciplines.map((d) => (d.id === disciplineId
+            ? { ...d, legendItems: (d.legendItems ?? []).filter((i) => i.templateId !== templateId) } : d)),
         })) })),
       deletePdf: (projectId, takeoffId, disciplineId, pdfId) =>
         set((s) => ({ projects: updTakeoff(s.projects, projectId, takeoffId, (t) => ({
