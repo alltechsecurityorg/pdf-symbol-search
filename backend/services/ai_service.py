@@ -32,6 +32,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "x": {"type": "number"}, "y": {"type": "number"},
             "w": {"type": "number"}, "h": {"type": "number"},
+            "sheet": {"type": "string", "enum": ["drawing", "legend"], "description": "Which document to view (default drawing). 'legend' is only available when a separate legend sheet exists."},
         }, "required": ["x", "y", "w", "h"]}}},
     {"type": "function", "function": {
         "name": "count_symbol",
@@ -76,6 +77,13 @@ Your targets are EXACTLY the symbol types defined in this sheet's legend table. 
 and view it up close; use the legend's own names. If the sheet has no legend, call finish immediately
 saying a legend could not be found and nothing was counted."""
 
+SYSTEM_LEGEND_SHEET = SYSTEM_COMMON + """
+
+A separate LEGEND SHEET is provided for this discipline (its overview is attached; view it up close
+with get_view using sheet='legend'). Your targets are EXACTLY the symbol types defined in that legend;
+use the legend's own names. Count instances on the DRAWING sheet only - count_symbol always operates
+on the drawing."""
+
 
 def _png_msg(png: bytes, caption: str) -> dict:
     return {"role": "user", "content": [
@@ -89,7 +97,7 @@ def _view_png(pdf_id: str, x: float, y: float, w: float, h: float) -> bytes:
     return render_clip(pdf_id, x, y, w, h, z, pad=1.0)
 
 
-def run_ai_count(pdf_id: str, targets: list | None = None):
+def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | None = None):
     """Generator of event dicts: status / item / done / error.
 
     targets: [{name, thumbnail(data URL)}] restricts the run to those symbols;
@@ -106,10 +114,20 @@ def run_ai_count(pdf_id: str, targets: list | None = None):
 
     overview = _view_png(pdf_id, 0, 0, W, H)
     targets = [t for t in (targets or []) if t.get("name") and t.get("thumbnail")]
+    legend = None  # (pdf_id, W, H)
+    if not targets and legend_pdf_id and legend_pdf_id != pdf_id:
+        ldoc = fitz.open(str(get_pdf_path(legend_pdf_id)))
+        lrect = ldoc[0].rect
+        ldoc.close()
+        legend = (legend_pdf_id, lrect.width, lrect.height)
+    system = SYSTEM_TARGETS if targets else (SYSTEM_LEGEND_SHEET if legend else SYSTEM_LEGEND)
     messages = [
-        {"role": "system", "content": SYSTEM_TARGETS if targets else SYSTEM_LEGEND},
-        _png_msg(overview, f"Overview of the sheet. It covers x 0..{W:.0f}, y 0..{H:.0f} PDF points."),
+        {"role": "system", "content": system},
+        _png_msg(overview, f"Overview of the DRAWING sheet. It covers x 0..{W:.0f}, y 0..{H:.0f} PDF points."),
     ]
+    if legend:
+        messages.append(_png_msg(_view_png(legend[0], 0, 0, legend[1], legend[2]),
+                                 f"Overview of the LEGEND sheet. It covers x 0..{legend[1]:.0f}, y 0..{legend[2]:.0f} PDF points (use sheet='legend' in get_view)."))
     if targets:
         content = [{"type": "text", "text": f"Count ONLY these {len(targets)} symbol types:"}]
         for t in targets:
@@ -160,17 +178,19 @@ def run_ai_count(pdf_id: str, targets: list | None = None):
                 args = {}
             result_text = ""
             if fn == "get_view":
+                on_legend = legend is not None and args.get("sheet") == "legend"
+                vid, vw, vh = (legend[0], legend[1], legend[2]) if on_legend else (pdf_id, W, H)
                 x, y = float(args["x"]), float(args["y"])
                 w, h = float(args["w"]), float(args["h"])
-                x = max(0, min(x, W - 1)); y = max(0, min(y, H - 1))
-                w = max(4.0, min(w, W - x)); h = max(4.0, min(h, H - y))
+                x = max(0, min(x, vw - 1)); y = max(0, min(y, vh - 1))
+                w = max(4.0, min(w, vw - x)); h = max(4.0, min(h, vh - y))
                 try:
-                    png = _view_png(pdf_id, x, y, w, h)
-                    result_text = f"View rendered; the attached image covers x {x:.1f}..{x+w:.1f}, y {y:.1f}..{y+h:.1f} pt."
+                    png = _view_png(vid, x, y, w, h)
+                    result_text = f"View rendered from the {'LEGEND' if on_legend else 'DRAWING'} sheet; the attached image covers x {x:.1f}..{x+w:.1f}, y {y:.1f}..{y+h:.1f} pt."
                     pending_images.append((png, result_text))
                 except Exception as e:  # noqa: BLE001
                     result_text = f"view failed: {e}"
-                yield {"type": "status", "text": f"AI looks at ({x:.0f},{y:.0f}) {w:.0f}x{h:.0f}pt"}
+                yield {"type": "status", "text": f"AI looks at the {'legend' if on_legend else 'drawing'} ({x:.0f},{y:.0f}) {w:.0f}x{h:.0f}pt"}
             elif fn == "count_symbol":
                 name = str(args.get("name") or "Unnamed item")[:60]
                 x, y = float(args["x"]), float(args["y"])

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore, type SymbolTemplate } from '../store/appStore';
+import { useProjectStore } from '../store/projectStore';
 import { SymbolCard } from './SymbolCard';
 import { runSearchStream, exportResults, saveAnnotatedPdf, runAiCount } from '../api/client';
 import { PRESET_COLORS } from './SymbolCard';
@@ -23,12 +24,19 @@ export function LegendPanel() {
   const [aiLog, setAiLog] = useState<string[]>([]);
   const aiAbort = useRef<AbortController | null>(null);
   const log = (t: string) => setAiLog((l) => [...l.slice(-3), t]);
+  // the discipline of the open sheet supplies the legend used across its drawings
+  const legendPdfId = useProjectStore((s) => {
+    const t = s.projects.find((p) => p.id === s.openProjectId)?.takeoffs.find((x) => x.id === s.openTakeoffId);
+    const d = t?.disciplines.find((dd) => dd.pdfs.some((f) => f.pdfId === s.openPdfId));
+    return d?.legendPdfId ?? null;
+  });
+
   const startAi = () => {
     if (!sitePdf || aiBusy) return;
     const targets = useAppStore.getState().symbols.map((x) => ({ name: x.name, thumbnail: x.thumbnail }));
     setAiBusy(true);
     setAiLog([targets.length ? `Finding your ${targets.length} symbol${targets.length === 1 ? '' : 's'}…` : 'Reading the legend…']);
-    aiAbort.current = runAiCount(sitePdf.pdfId, targets, {
+    aiAbort.current = runAiCount(sitePdf.pdfId, targets, legendPdfId && legendPdfId !== sitePdf.pdfId ? legendPdfId : null, {
       onStatus: (t) => log(t),
       onItem: (it) => {
         const st = useAppStore.getState();
@@ -175,7 +183,7 @@ export function LegendPanel() {
             <span className="text-xl">✨</span>
             <span>
               <span className="block text-[14px] font-bold text-white">AI count <span className="text-[11px] font-semibold text-sky-400 align-middle ml-1">BETA</span></span>
-              <span className="block text-[12px] text-[#8a92a6] mt-0.5">{symbols.length ? `AI finds and counts your ${symbols.length} selected symbol${symbols.length === 1 ? '' : 's'} on this sheet.` : 'AI counts the symbol types from this sheet\u2019s legend.'}</span>
+              <span className="block text-[12px] text-[#8a92a6] mt-0.5">{symbols.length ? `AI finds and counts your ${symbols.length} selected symbol${symbols.length === 1 ? '' : 's'} on this sheet.` : (legendPdfId ? 'AI counts the symbol types from this discipline\u2019s legend sheet.' : 'AI counts the symbol types from this sheet\u2019s legend.')}</span>
             </span>
           </button>
         ) : (

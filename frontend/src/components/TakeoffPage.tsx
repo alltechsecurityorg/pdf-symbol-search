@@ -42,16 +42,22 @@ function DropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
 interface Pending { key: string; disciplineId: string; filename: string }
 interface ImportState { discipline: Discipline; pdfId: string; filename: string; pages: { page: number; name: string }[] }
 
-function ImportPagesModal({ st, onClose, onImport }: { st: ImportState; onClose: () => void; onImport: (pages: number[]) => Promise<void> }) {
+function ImportPagesModal({ st, onClose, onImport }: { st: ImportState; onClose: () => void; onImport: (pages: number[], legendPage: number | null) => Promise<void> }) {
   const [q, setQ] = useState('');
   const [sel, setSel] = useState<Set<number>>(new Set());
+  const [legendPage, setLegendPage] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const shown = useMemo(() => {
     const s = q.trim().toLowerCase();
     return s ? st.pages.filter((p) => p.name.toLowerCase().includes(s) || String(p.page) === s) : st.pages;
   }, [q, st.pages]);
   const toggle = (p: number) => setSel((s) => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n; });
-  const go = async () => { setBusy(true); try { await onImport([...sel].sort((a, b) => a - b)); } finally { setBusy(false); } };
+  const go = async () => {
+    setBusy(true);
+    const pages = new Set(sel);
+    if (legendPage != null) pages.add(legendPage); // the legend page always imports
+    try { await onImport([...pages].sort((a, b) => a - b), legendPage); } finally { setBusy(false); }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
@@ -71,11 +77,16 @@ function ImportPagesModal({ st, onClose, onImport }: { st: ImportState; onClose:
 
         <div className="max-h-[220px] overflow-y-auto pr-1 -mr-1">
           {shown.map((p) => (
-            <label key={p.page} className="flex items-center gap-3 py-1.5 cursor-pointer hover:bg-[#262b3a] rounded px-1">
-              <input type="checkbox" checked={sel.has(p.page)} onChange={() => toggle(p.page)} className="w-4 h-4 accent-orange-500 shrink-0" />
+            <div key={p.page} className="flex items-center gap-3 py-1.5 hover:bg-[#262b3a] rounded px-1">
+              <input type="checkbox" checked={sel.has(p.page)} onChange={() => toggle(p.page)} className="w-4 h-4 accent-orange-500 shrink-0 cursor-pointer" />
               <span className="w-5 text-right text-[15px] text-[#8a92a6] shrink-0">{p.page}</span>
-              <span className="text-[15px] font-bold text-white leading-snug">{p.name}</span>
-            </label>
+              <button onClick={() => toggle(p.page)} className="flex-1 text-left text-[15px] font-bold text-white leading-snug cursor-pointer">{p.name}</button>
+              <button
+                onClick={() => setLegendPage(legendPage === p.page ? null : p.page)}
+                title="Use this page as the discipline's legend"
+                className={`shrink-0 text-[11px] font-bold px-2 py-0.5 rounded cursor-pointer ${legendPage === p.page ? 'bg-sky-500 text-white' : 'text-[#6b7280] border border-[#3a4156] hover:text-white'}`}
+              >LEGEND</button>
+            </div>
           ))}
           {shown.length === 0 && <p className="py-6 text-center text-[#8a92a6]">No pages match.</p>}
         </div>
@@ -101,6 +112,7 @@ export function TakeoffPage() {
   const deleteDiscipline = useProjectStore((s) => s.deleteDiscipline);
   const deleteTakeoff = useProjectStore((s) => s.deleteTakeoff);
   const addPdf = useProjectStore((s) => s.addPdf);
+  const setLegend = useProjectStore((s) => s.setLegend);
   const deletePdf = useProjectStore((s) => s.deletePdf);
   const openWorkspace = useProjectStore((s) => s.openWorkspace);
   const goProject = useProjectStore((s) => s.goProject);
@@ -142,10 +154,12 @@ export function TakeoffPage() {
     }
   };
 
-  const doImport = async (pages: number[]) => {
+  const doImport = async (pages: number[], legendPage: number | null) => {
     if (!importing) return;
     const items = await splitPdf(importing.pdfId, pages);
     for (const it of items) addSheet(importing.discipline, it, { pdfId: importing.pdfId, page: it.page });
+    const leg = legendPage != null ? items.find((it) => it.page === legendPage) : null;
+    if (leg) setLegend(projectId, takeoffId, importing.discipline.id, leg.pdf_id);
     setImporting(null);
   };
 
@@ -219,13 +233,18 @@ export function TakeoffPage() {
                       <img src={getThumbUrl(pdf.pdfId)} alt="" className="w-full h-full object-cover object-top" loading="lazy" />
                     </button>
                     <div className="flex items-center gap-2 mt-2 pr-1">
-                      <span className="w-3.5 h-3.5 rounded-full border border-[#8a92a6] shrink-0" />
+                      {d.legendPdfId === pdf.pdfId
+                        ? <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-500 text-white">LEGEND</span>
+                        : <span className="w-3.5 h-3.5 rounded-full border border-[#8a92a6] shrink-0" />}
                       <span className="flex-1 text-[14px] text-white truncate" title={pdf.filename}>{pdf.filename}</span>
                       <div className="relative">
                         <button onClick={(e) => { e.stopPropagation(); setMenu(menu === pdf.pdfId ? null : pdf.pdfId); }} className="w-8 h-7 flex items-center justify-center text-[#8a92a6] hover:text-white cursor-pointer"><IconDots /></button>
                         {menu === pdf.pdfId && (
                           <Menu>
                             <button onClick={() => { open(pdf); }} className={menuItem}>Open</button>
+                            {d.legendPdfId === pdf.pdfId
+                              ? <button onClick={() => { setLegend(projectId, takeoffId, d.id, null); setMenu(null); }} className={menuItem}>Remove legend mark</button>
+                              : <button onClick={() => { setLegend(projectId, takeoffId, d.id, pdf.pdfId); setMenu(null); }} className={menuItem}>Set as legend</button>}
                             <button onClick={() => { if (confirm(`Remove "${pdf.filename}" from ${d.name}?`)) deletePdf(projectId, takeoffId, d.id, pdf.pdfId); setMenu(null); }} className={`${menuItem} text-red-400`}><IconTrash />Delete…</button>
                           </Menu>
                         )}

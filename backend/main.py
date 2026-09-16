@@ -393,9 +393,15 @@ async def ai_count(pdf_id: str, request: AiCountRequest | None = None):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="PDF not found")
     targets = [t.model_dump() for t in (request.targets if request else [])]
+    legend_id = request.legend_pdf_id if request else None
+    if legend_id:
+        try:
+            get_pdf_path(legend_id)
+        except FileNotFoundError:
+            legend_id = None
 
     async def gen():
-        async for ev in iterate_in_threadpool(run_ai_count(pdf_id, targets)):
+        async for ev in iterate_in_threadpool(run_ai_count(pdf_id, targets, legend_id)):
             yield {"event": ev.get("type", "status"), "data": json.dumps(ev)}
 
     return EventSourceResponse(gen())

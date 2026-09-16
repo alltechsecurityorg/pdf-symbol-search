@@ -263,6 +263,7 @@ export interface AiItem {
 export function runAiCount(
   pdfId: string,
   targets: { name: string; thumbnail: string }[],
+  legendPdfId: string | null,
   cb: { onStatus: (text: string) => void; onItem: (item: AiItem) => void;
         onDone: (summary: string, cost: number, items: number) => void; onError: (err: Error) => void },
 ): AbortController {
@@ -270,7 +271,7 @@ export function runAiCount(
   fetch(`${API_BASE}/ai-count/${pdfId}`, {
     method: 'POST', signal: controller.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ targets }),
+    body: JSON.stringify({ targets, legend_pdf_id: legendPdfId }),
   })
     .then(async (res) => {
       if (!res.ok) throw new Error((await res.json().catch(() => ({})) as { detail?: string }).detail || 'AI count failed');

@@ -109,3 +109,4 @@ class AiTarget(BaseModel):
 
 class AiCountRequest(BaseModel):
     targets: list[AiTarget] = []
+    legend_pdf_id: str | None = None

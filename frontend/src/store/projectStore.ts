@@ -15,7 +15,7 @@ export interface TakeoffPdf {
   sourcePdfId?: string; // multi-page upload this sheet was split from
   sourcePage?: number;
 }
-export interface Discipline { id: string; name: string; pdfs: TakeoffPdf[] }
+export interface Discipline { id: string; name: string; pdfs: TakeoffPdf[]; legendPdfId?: string | null }
 export interface Takeoff { id: string; name: string; revision: number; created: string; disciplines: Discipline[] }
 
 export interface Project {
@@ -69,6 +69,7 @@ interface ProjectState {
   addDiscipline: (projectId: string, takeoffId: string, name: string) => void;
   deleteDiscipline: (projectId: string, takeoffId: string, disciplineId: string) => void;
   addPdf: (projectId: string, takeoffId: string, disciplineId: string, pdf: TakeoffPdf) => void;
+  setLegend: (projectId: string, takeoffId: string, disciplineId: string, pdfId: string | null) => void;
   deletePdf: (projectId: string, takeoffId: string, disciplineId: string, pdfId: string) => void;
 
   openProject: (id: string) => void;
@@ -144,9 +145,13 @@ export const useProjectStore = create<ProjectState>()(
           ...t, disciplines: t.disciplines.map((d) => (d.id === disciplineId ? { ...d, pdfs: [...d.pdfs, pdf] } : d)),
         })) })),
 
+      setLegend: (projectId, takeoffId, disciplineId, pdfId) =>
+        set((s) => ({ projects: updTakeoff(s.projects, projectId, takeoffId, (t) => ({
+          ...t, disciplines: t.disciplines.map((d) => (d.id === disciplineId ? { ...d, legendPdfId: pdfId } : d)),
+        })) })),
       deletePdf: (projectId, takeoffId, disciplineId, pdfId) =>
         set((s) => ({ projects: updTakeoff(s.projects, projectId, takeoffId, (t) => ({
-          ...t, disciplines: t.disciplines.map((d) => (d.id === disciplineId ? { ...d, pdfs: d.pdfs.filter((f) => f.pdfId !== pdfId) } : d)),
+          ...t, disciplines: t.disciplines.map((d) => (d.id === disciplineId ? { ...d, pdfs: d.pdfs.filter((f) => f.pdfId !== pdfId), legendPdfId: d.legendPdfId === pdfId ? null : d.legendPdfId } : d)),
         })) })),
       openProject: (id) => set({ view: 'project', openProjectId: id, openTakeoffId: null, openPdfId: null }),
       openTakeoff: (projectId, takeoffId) => set({ view: 'takeoff', openProjectId: projectId, openTakeoffId: takeoffId, openPdfId: null }),
