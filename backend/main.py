@@ -19,13 +19,20 @@ from models.schemas import (
     ExportRequest,
     UploadResponse,
     AnnotateRequest,
+    PageInfo,
+    SplitRequest,
+    SplitItem,
 )
-from services.pdf_service import save_pdf, get_pdf_path
+from services.pdf_service import save_pdf, get_pdf_path, page_names, split_pdf, thumbnail_path, nobg_pdf_path, NoLayersError, render_clip
+from fastapi.responses import Response
 from services.crop_service import crop_symbol
 from services.search_service import run_search, render_page, rescale_template, get_template, match_symbol_on_page, pixel_to_pdf_coords, clear_page_cache
 from services.vector_service import load_vector_data, get_page_drawings
 from services.text_service import get_page_text_blocks
 from services.export_service import export_csv
+from services.tile_service import prepare as prepare_tiles, status as tiles_status, TILES_DIR
+from services.vector_match import load_geometry, find_instances, merge_matches
+from fastapi.staticfiles import StaticFiles
 from utils.coordinates import SCALE_FACTOR
 
 app = FastAPI(title="PDF Symbol Search")
@@ -61,6 +68,8 @@ async def upload_pdf(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
 
+    if result["page_count"] == 1:
+        prepare_tiles(result["pdf_id"])
     return result
 
 
@@ -186,6 +195,19 @@ async def run_search_stream(request: SearchRequest):
                     pdf_coords["page"] = page_num
                     pdf_matches.append(pdf_coords)
 
+                # Geometry matching on the sheet's own vectors (exact for CAD blocks); raster fills gaps.
+                geom = load_geometry(symbol.template_id)
+                if geom and page_num == 1:
+                    try:
+                        vec = await run_in_thread(find_instances, request.pdf_id, geom)
+                    except Exception:  # noqa: BLE001
+                        logging.getLogger(__name__).exception("vector search failed")
+                        vec = []
+                    for v in vec:
+                        v["page"] = page_num
+                    if vec:
+                        pdf_matches = merge_matches(vec, pdf_matches)
+
                 yield {
                     "event": "symbol_complete",
                     "data": json.dumps({
@@ -294,3 +316,89 @@ async def save_annotated(request: AnnotateRequest):
 async def clear_cache():
     clear_page_cache()
     return {"status": "ok"}
+
+
+# --- Multi-page import: sheet names, split, thumbnails ---------------------
+
+@app.get("/api/pdf/{pdf_id}/pages", response_model=list[PageInfo])
+async def list_pages(pdf_id: str):
+    try:
+        get_pdf_path(pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return await run_in_thread(page_names, pdf_id)
+
+
+@app.post("/api/split-pdf", response_model=list[SplitItem])
+async def split_pdf_endpoint(request: SplitRequest):
+    try:
+        get_pdf_path(request.pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    if not request.pages:
+        raise HTTPException(status_code=400, detail="No pages selected")
+    items = await run_in_thread(split_pdf, request.pdf_id, request.pages)
+    for it in items:
+        prepare_tiles(it["pdf_id"])
+    return items
+
+
+@app.get("/api/pdf/{pdf_id}/thumbnail")
+async def pdf_thumbnail(pdf_id: str):
+    try:
+        path = await run_in_thread(thumbnail_path, pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return FileResponse(str(path), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.api_route("/api/pdf/{pdf_id}/nobg", methods=["GET", "HEAD"])
+async def pdf_no_background(pdf_id: str):
+    """Same PDF with the architectural (xref) layers hidden. 404 'no-layers' if it has none."""
+    try:
+        path = await run_in_thread(nobg_pdf_path, pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    except NoLayersError:
+        raise HTTPException(status_code=404, detail="no-layers")
+    return FileResponse(str(path), media_type="application/pdf",
+                        headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/api/pdf/{pdf_id}/clip")
+async def pdf_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float = 12, pad: float = 0.6):
+    """Small region of page 1 rasterised at z px/pt - used to tint matched symbols at any zoom."""
+    try:
+        get_pdf_path(pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    if w <= 0 or h <= 0 or w > 600 or h > 600:
+        raise HTTPException(status_code=400, detail="bad clip size")
+    try:
+        png = await run_in_thread(render_clip, pdf_id, x, y, w, h, z, pad)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+# --- Deep Zoom tiles ------------------------------------------------------
+
+@app.post("/api/tiles/{pdf_id}/prepare")
+async def tiles_prepare(pdf_id: str):
+    try:
+        return prepare_tiles(pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
+
+@app.get("/api/tiles/{pdf_id}/status")
+async def tiles_status_endpoint(pdf_id: str):
+    try:
+        get_pdf_path(pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return tiles_status(pdf_id)
+
+
+# .dzi descriptors and tile PNGs; mounted last so the API routes above win.
+app.mount("/api/tilefiles", StaticFiles(directory=str(TILES_DIR)), name="tilefiles")

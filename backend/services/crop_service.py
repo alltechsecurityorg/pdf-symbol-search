@@ -11,6 +11,7 @@ import os
 from utils.coordinates import RENDER_DPI, SCALE_FACTOR
 from services.vector_service import extract_vector_data, save_vector_data
 from services.text_service import extract_text_in_rect
+from services.vector_match import template_geometry, save_geometry
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/tmp/pdf-symbol-search"))
 TEMPLATE_DIR = DATA_DIR / "templates"
@@ -56,6 +57,11 @@ def crop_symbol(pdf_path: str, page_num: int, x: float, y: float, w: float, h: f
     if inner_text:
         vector_data["inner_text"] = inner_text
     save_vector_data(template_id, vector_data)
+    try:
+        geom = template_geometry(Path(pdf_path).stem, x, y, w, h)
+        save_geometry(template_id, geom)
+    except Exception:  # noqa: BLE001 - raster matching still works without geometry
+        import logging; logging.getLogger(__name__).exception("template geometry failed")
 
     return {
         "template_id": template_id,
