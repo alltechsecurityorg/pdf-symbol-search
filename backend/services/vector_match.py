@@ -517,8 +517,10 @@ def find_instances_full(pdf_id: str, geom: dict, min_score: float = 0.9, max_ext
         cand = {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "confidence": round(min(sc, min(1.0, a_sc)), 3)}
         if gate == "ok" and sc >= min_score:
             out.append(cand)
-        elif imiss <= 0.06 and words_ok and (sc >= REVIEW_MIN or gate in ("attr", "extra")):
-            # geometrically plausible but below the bar (or gated): flag for human review
+        elif words_ok and imiss <= 0.15 and sc >= REVIEW_MIN:
+            # geometrically plausible but below the bar or marginally gated: mirrored blocks keep
+            # right-reading letters (small interior mismatch) and crossing walls add extra ink -
+            # both are questions for a human, not silent rejections
             review.append(cand)
     LAST_DEBUG.clear(); LAST_DEBUG.update(dbg)
     # review boxes overlapping a confirmed match are duplicates, not questions
