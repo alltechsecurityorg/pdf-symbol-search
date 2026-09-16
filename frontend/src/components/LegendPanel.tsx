@@ -15,7 +15,7 @@ export function LegendPanel() {
     setSearchProgressPercent, setManualModeSymbolId, markUnsearched, setFocusMatch, pdfLoading, pdfLoadingMessage,
     addCountedSymbol,
     armSymbol,
-    armAll,
+    armIds,
   } = useAppStore();
 
   const activePdf = sitePdf;
@@ -52,7 +52,7 @@ export function LegendPanel() {
     seededFor.current = openPdfId;
     setSymbols(ctx.legendItems.map((li) => ({
       id: uuidv4(), name: li.name, color: li.color, thumbnail: li.thumbnail, templateId: li.templateId,
-      cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: false,
+      cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: false, queued: false,
     })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openPdfId, isLegendSheet]);
@@ -64,9 +64,11 @@ export function LegendPanel() {
 
   const startAi = () => {
     if (!sitePdf || aiBusy) return;
-    const targets = useAppStore.getState().symbols.map((x) => ({ name: x.name, thumbnail: x.thumbnail }));
+    const all = useAppStore.getState().symbols;
+    const checked = all.filter((x) => x.selectedForSearch);
+    const targets = (checked.length > 0 ? checked : all).map((x) => ({ name: x.name, thumbnail: x.thumbnail }));
     setAiBusy(true);
-    setAiLog([targets.length ? `Finding your ${targets.length} symbol${targets.length === 1 ? '' : 's'}…` : 'Reading the legend…']);
+    setAiLog([targets.length ? `AI is finding ${checked.length > 0 ? `your ${targets.length} selected` : `all ${targets.length}`} symbol${targets.length === 1 ? '' : 's'}…` : 'Reading the legend…']);
     aiAbort.current = runAiCount(sitePdf.pdfId, targets, legendPdfId && legendPdfId !== sitePdf.pdfId ? legendPdfId : null, {
       onStatus: (t) => log(t),
       onItem: (it) => {
@@ -135,7 +137,7 @@ export function LegendPanel() {
   useEffect(() => {
     if (isLegendSheet) return; // the legend sheet is for defining symbols, not counting them
     if (isSearching || pdfLoading || !sitePdf) return;
-    const pending = symbols.filter((s) => s.selectedForSearch && !s.searched);
+    const pending = symbols.filter((s) => s.queued && !s.searched);
     if (pending.length > 0) runCount(pending);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbols, isSearching, pdfLoading, sitePdf]);
@@ -207,17 +209,43 @@ export function LegendPanel() {
 
       <div className="px-4 pb-2" hidden={isLegendSheet}>
         {!aiBusy ? (
-          <button
-            onClick={startAi}
-            disabled={!activePdf || pdfLoading}
-            className="w-full text-left rounded-md bg-[#262b3a] border-b-4 border-sky-500 px-5 py-3 flex items-center gap-3 cursor-pointer hover:bg-[#2a3040] transition-colors disabled:opacity-40 disabled:cursor-default"
-          >
-            <span className="text-xl">✨</span>
-            <span>
-              <span className="block text-[14px] font-bold text-white">AI count <span className="text-[11px] font-semibold text-sky-400 align-middle ml-1">BETA</span></span>
-              <span className="block text-[12px] text-[#8a92a6] mt-0.5">{symbols.length ? `AI finds and counts your ${symbols.length} selected symbol${symbols.length === 1 ? '' : 's'} on this sheet.` : (legendPdfId ? 'AI counts the symbol types from this discipline\u2019s legend sheet.' : 'AI counts the symbol types from this sheet\u2019s legend.')}</span>
-            </span>
-          </button>
+          (() => {
+            const checked = symbols.filter((s) => s.selectedForSearch).length;
+            const uncounted = symbols.filter((s) => !s.searched && !s.queued).length;
+            const exactN = checked > 0 ? checked : uncounted;
+            const aiTip = symbols.length === 0
+              ? (legendPdfId ? 'AI counts the discipline legend\u2019s symbol types.' : 'AI counts the types from this sheet\u2019s legend.')
+              : checked > 0 ? `AI finds and counts the ${checked} ticked symbol${checked === 1 ? '' : 's'}.` : `AI finds and counts all ${symbols.length} symbols.`;
+            return (
+              <div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      const st = useAppStore.getState();
+                      const ids = (checked > 0 ? st.symbols.filter((s) => s.selectedForSearch) : st.symbols.filter((s) => !s.searched && !s.queued)).map((s) => s.id);
+                      armIds(ids);
+                    }}
+                    disabled={!activePdf || pdfLoading || exactN === 0 || isSearching}
+                    title={checked > 0 ? 'Exact-match count of the ticked symbols' : 'Exact-match count of everything not yet counted'}
+                    className="flex-1 h-10 rounded-md bg-orange-500 hover:bg-orange-600 text-[14px] font-bold text-white cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  >
+                    Count {checked > 0 ? `${checked} selected` : (uncounted > 0 ? `page (${uncounted})` : 'page')}
+                  </button>
+                  <button
+                    onClick={startAi}
+                    disabled={!activePdf || pdfLoading}
+                    title={aiTip}
+                    className="flex-1 h-10 rounded-md border border-sky-500/70 text-sky-400 hover:bg-sky-500 hover:text-white text-[14px] font-bold cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                  >
+                    ✨ AI count{checked > 0 ? ` ${checked} selected` : ''}
+                  </button>
+                </div>
+                <p className="text-[11px] text-[#8a92a6] mt-1.5 px-0.5 leading-snug">
+                  {checked > 0 ? `Runs only the ${checked} ticked symbol${checked === 1 ? '' : 's'}.` : 'Tick rows to count just a subset.'}
+                </p>
+              </div>
+            );
+          })()
         ) : (
           <div className="rounded-md bg-[#262b3a] border-b-4 border-sky-500 px-5 py-3">
             <div className="flex items-center justify-between mb-1.5">
@@ -242,21 +270,6 @@ export function LegendPanel() {
           <p className="text-xs text-yellow-300 text-center">Manual mode: click on the drawing to add an item. Double-click a highlight to remove it.</p>
         </div>
       )}
-
-      {(() => {
-        const uncounted = symbols.filter((s) => !s.searched && !s.selectedForSearch).length;
-        return uncounted > 0 && !isLegendSheet && !pdfLoading ? (
-          <div className="px-4 pb-2">
-            <button
-              onClick={armAll}
-              disabled={isSearching}
-              className="w-full h-10 rounded-md bg-orange-500 hover:bg-orange-600 text-[14px] font-bold text-white cursor-pointer disabled:opacity-40"
-            >
-              Count {uncounted} symbol{uncounted === 1 ? '' : 's'} on this page
-            </button>
-          </div>
-        ) : null;
-      })()}
 
       {(isSearching || searchProgress) && (
         <div className="mx-4 mb-2">

@@ -24,7 +24,7 @@ const ico = 'w-4 h-4';
 const act = 'w-7 h-7 rounded flex items-center justify-center text-[#8a92a6] hover:text-white hover:bg-[#2c3245] cursor-pointer';
 
 export function SymbolCard({
-  symbol, onToggleVisibility, onDelete, onUpdateName, onUpdateColor, onCycleMatch, onToggleManualMode, onMarkUnsearched, onCount, isManualMode,
+  symbol, onToggleVisibility, onDelete, onUpdateName, onUpdateColor, onCycleMatch, onToggleSelectedForSearch, onToggleManualMode, onMarkUnsearched, onCount, isManualMode,
 }: SymbolCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(symbol.name);
@@ -52,8 +52,15 @@ export function SymbolCard({
         </div>
       )}
 
-      {/* header: chevron · name · count · eye (+ hover actions) */}
+      {/* header: checkbox · chevron · name · count · eye (+ hover actions) */}
       <div className="flex items-center gap-1.5 pl-3 pr-2 h-10">
+        <input
+          type="checkbox"
+          checked={symbol.selectedForSearch}
+          onChange={onToggleSelectedForSearch}
+          title="Select for a subset count"
+          className="w-3.5 h-3.5 accent-orange-500 shrink-0 cursor-pointer"
+        />
         <button onClick={() => setOpen(!open)} className="w-5 h-5 flex items-center justify-center text-[#aab2c4] hover:text-white cursor-pointer" title={open ? 'Collapse' : 'Expand'}>
           <svg className={`w-3.5 h-3.5 transition-transform ${open ? '' : '-rotate-90'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 9l6 6 6-6"/></svg>
         </button>
@@ -84,7 +91,7 @@ export function SymbolCard({
           <button onClick={cycle} title={count ? 'Jump to next match' : 'None found'} className={`min-w-6 text-right text-[15px] font-bold tabular-nums ${count ? 'text-white cursor-pointer hover:text-orange-400' : 'text-[#6b7280] cursor-default'}`}>
             {count}
           </button>
-        ) : symbol.selectedForSearch ? (
+        ) : symbol.queued ? (
           <svg className="w-4 h-4 animate-spin shrink-0" viewBox="0 0 50 50" fill="none" aria-label="Counting"><circle cx="25" cy="25" r="20" stroke="#2c3245" strokeWidth="7"/><path d="M45 25a20 20 0 0 0-20-20" stroke="#f97316" strokeWidth="7" strokeLinecap="round"/></svg>
         ) : (
           <button onClick={onCount} title="Count this symbol on the page" className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded border border-orange-500/70 text-orange-400 hover:bg-orange-500 hover:text-white cursor-pointer">

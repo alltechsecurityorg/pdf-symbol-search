@@ -27,7 +27,8 @@ export interface SymbolTemplate {
   visible: boolean;
   matches: SymbolMatch[];
   searched: boolean;
-  selectedForSearch: boolean;
+  selectedForSearch: boolean; // row checkbox: a user-chosen subset for the next run
+  queued: boolean;            // waiting for / being processed by the counter
 }
 
 export interface PdfInfo {
@@ -67,11 +68,12 @@ interface AppState {
   setLegendPdf: (info: PdfInfo) => void;
   setSitePdf: (info: PdfInfo) => void;
   setActiveView: (view: 'legend' | 'site') => void;
-  addSymbol: (symbol: Omit<SymbolTemplate, 'id' | 'visible' | 'matches' | 'searched' | 'selectedForSearch'>) => void;
-  addCountedSymbol: (symbol: Omit<SymbolTemplate, 'id' | 'visible' | 'searched' | 'selectedForSearch'>) => void;
+  addSymbol: (symbol: Omit<SymbolTemplate, 'id' | 'visible' | 'matches' | 'searched' | 'selectedForSearch' | 'queued'>) => void;
+  addCountedSymbol: (symbol: Omit<SymbolTemplate, 'id' | 'visible' | 'searched' | 'selectedForSearch' | 'queued'>) => void;
   setSymbols: (symbols: SymbolTemplate[]) => void;
   armSymbol: (id: string) => void;
   armAll: () => void;
+  armIds: (ids: string[]) => void;
   removeSymbol: (id: string) => void;
   updateSymbolName: (id: string, name: string) => void;
   updateSymbolColor: (id: string, color: string) => void;
@@ -138,7 +140,7 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       symbols: [
         ...state.symbols,
-        { ...symbol, id: uuidv4(), visible: true, matches: [], searched: false, selectedForSearch: true },
+        { ...symbol, id: uuidv4(), visible: true, matches: [], searched: false, selectedForSearch: false, queued: true },
       ],
     })),
 
@@ -147,16 +149,18 @@ export const useAppStore = create<AppState>((set) => ({
 
   // Queue one / all uncounted symbols for the counter (counting is explicit, not automatic)
   armSymbol: (id) =>
-    set((state) => ({ symbols: state.symbols.map((s) => (s.id === id ? { ...s, selectedForSearch: true } : s)) })),
+    set((state) => ({ symbols: state.symbols.map((s) => (s.id === id ? { ...s, queued: true, searched: false } : s)) })),
   armAll: () =>
-    set((state) => ({ symbols: state.symbols.map((s) => (s.searched ? s : { ...s, selectedForSearch: true })) })),
+    set((state) => ({ symbols: state.symbols.map((s) => (s.searched ? s : { ...s, queued: true })) })),
+  armIds: (ids) =>
+    set((state) => ({ symbols: state.symbols.map((s) => (ids.includes(s.id) ? { ...s, queued: true, searched: false } : s)) })),
 
   // AI-counted items arrive with their matches already found - never re-queued for auto-count
   addCountedSymbol: (symbol) =>
     set((state) => ({
       symbols: [
         ...state.symbols,
-        { ...symbol, id: uuidv4(), visible: true, searched: true, selectedForSearch: false },
+        { ...symbol, id: uuidv4(), visible: true, searched: true, selectedForSearch: false, queued: false },
       ],
     })),
 
@@ -193,7 +197,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSymbolMatches: (templateId, matches) =>
     set((state) => ({
       symbols: state.symbols.map((s) =>
-        s.templateId === templateId ? { ...s, matches, searched: true, selectedForSearch: false } : s
+        s.templateId === templateId ? { ...s, matches, searched: true, queued: false } : s
       ),
     })),
 
@@ -273,20 +277,20 @@ export const useAppStore = create<AppState>((set) => ({
   markSearched: (templateId) =>
     set((state) => ({
       symbols: state.symbols.map((s) =>
-        s.templateId === templateId ? { ...s, searched: true, selectedForSearch: false } : s
+        s.templateId === templateId ? { ...s, searched: true, queued: false } : s
       ),
     })),
 
   markUnsearched: (id) =>
     set((state) => ({
       symbols: state.symbols.map((s) =>
-        s.id === id ? { ...s, searched: false, selectedForSearch: true, matches: [] } : s
+        s.id === id ? { ...s, searched: false, queued: true, matches: [] } : s
       ),
     })),
 
   clearAllMatches: () =>
     set((state) => ({
-      symbols: state.symbols.map((s) => ({ ...s, matches: [], searched: false, selectedForSearch: true })),
+      symbols: state.symbols.map((s) => ({ ...s, matches: [], searched: false, queued: true })),
     })),
 
   setConfidenceThreshold: (value) => set({ confidenceThreshold: value }),
