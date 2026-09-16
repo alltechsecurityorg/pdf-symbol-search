@@ -8,3 +8,4 @@ Pillow==10.1.0
 sse-starlette==1.8.2
 pyvips>=2.2,<3
 requests>=2.31,<3
+pytesseract>=0.3.10,<0.4

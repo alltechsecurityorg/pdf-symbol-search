@@ -68,6 +68,10 @@ def extract_legend(pdf_id: str, x: float, y: float, w: float, h: float) -> list[
         words = [wd for wd in idx["words"] if wd[1] < gy1 + 1 and wd[3] > gy0 - 1 and gx1 - 1 <= wd[0] <= gx1 + 300]
         words.sort(key=lambda wd: wd[0])
         name = " ".join(str(wd[4]) for wd in words).strip()[:60]
+        if not name:
+            # outlined description text: OCR the strip right of the glyph
+            from services.ocr_service import read_line
+            name = read_line(pdf_id, gx1 + 1.5, gy0 - 1.5, min(300, x + w - gx1 + 260), (gy1 - gy0) + 3)[:60]
         tpl = crop_symbol(pdf_path, 1, gx0 - PAD, gy0 - PAD, (gx1 - gx0) + 2 * PAD, (gy1 - gy0) + 2 * PAD)
         out.append({
             "template_id": tpl["template_id"],

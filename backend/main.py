@@ -32,7 +32,8 @@ from services.vector_service import load_vector_data, get_page_drawings
 from services.text_service import get_page_text_blocks
 from services.export_service import export_csv
 from services.tile_service import prepare as prepare_tiles, status as tiles_status, TILES_DIR
-from services.vector_match import load_geometry, find_instances, merge_matches
+from services.vector_match import load_geometry, find_instances_full, merge_matches
+from services.ocr_service import read_code
 from services.ai_service import run_ai_count
 from services.legend_service import extract_legend
 from starlette.concurrency import iterate_in_threadpool
@@ -201,16 +202,40 @@ async def run_search_stream(request: SearchRequest):
 
                 # Geometry matching on the sheet's own vectors (exact for CAD blocks); raster fills gaps.
                 geom = load_geometry(symbol.template_id)
+                review = []
                 if geom and page_num == 1:
                     try:
-                        vec = await run_in_thread(find_instances, request.pdf_id, geom)
+                        vec, review = await run_in_thread(find_instances_full, request.pdf_id, geom)
                     except Exception:  # noqa: BLE001
                         logging.getLogger(__name__).exception("vector search failed")
-                        vec = []
+                        vec, review = [], []
                     for v in vec:
                         v["page"] = page_num
+                    for v in review:
+                        v["page"] = page_num
+                        v["review"] = True
                     if vec:
                         pdf_matches = merge_matches(vec, pdf_matches)
+
+                    # Boxed-code symbols: read the code inside each match; a different code
+                    # (CR where the template says KP) demotes the match to review.
+                    tpl_code = None
+                    b = geom.get("box") or [0, 0, 0, 0]
+                    if b[2] and 6 <= b[2] <= 40 and 4 <= b[3] <= 30:
+                        tpl_code = await run_in_thread(read_code, geom["pdf_id"], b[0], b[1], b[2], b[3])
+                    if tpl_code and len(tpl_code) >= 2:
+                        kept = []
+                        for m in pdf_matches:
+                            c = await run_in_thread(read_code, request.pdf_id, m["x"], m["y"], m["width"], m["height"])
+                            # demote only on a confident disagreement (OCR jitter must not demote)
+                            differs = bool(c) and (len(c) != len(tpl_code) or sum(a != b for a, b in zip(c, tpl_code)) > 1)
+                            if differs:
+                                m["review"] = True
+                                review.append(m)
+                            else:
+                                kept.append(m)
+                        pdf_matches = kept
+                pdf_matches = pdf_matches + review
 
                 yield {
                     "event": "symbol_complete",
@@ -406,6 +431,41 @@ async def ai_count(pdf_id: str, request: AiCountRequest | None = None):
             yield {"event": ev.get("type", "status"), "data": json.dumps(ev)}
 
     return EventSourceResponse(gen())
+
+
+@app.post("/api/export-yolo")
+async def export_yolo(request: AnnotateRequest):
+    """Training-data export: sheet render (150 DPI) + YOLO labels for the confirmed matches."""
+    try:
+        pdf_path = get_pdf_path(request.pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+
+    def build() -> bytes:
+        import io as _io
+        import zipfile
+        import fitz as _fitz
+        doc = _fitz.open(str(pdf_path))
+        page = doc[0]
+        W, H = page.rect.width, page.rect.height
+        png = page.get_pixmap(matrix=_fitz.Matrix(150 / 72, 150 / 72), alpha=False).tobytes("png")
+        doc.close()
+        classes = [s.name for s in request.symbols]
+        lines = []
+        for ci, sym in enumerate(request.symbols):
+            for m in sym.matches:
+                cx, cy = (m.x + m.width / 2) / W, (m.y + m.height / 2) / H
+                lines.append(f"{ci} {cx:.6f} {cy:.6f} {m.width / W:.6f} {m.height / H:.6f}")
+        buf = _io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(f"images/{request.pdf_id}.png", png)
+            z.writestr(f"labels/{request.pdf_id}.txt", "\n".join(lines) + "\n")
+            z.writestr("classes.txt", "\n".join(classes) + "\n")
+        return buf.getvalue()
+
+    data = await run_in_thread(build)
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename=training_{request.pdf_id}.zip"})
 
 
 @app.post("/api/legend-extract")

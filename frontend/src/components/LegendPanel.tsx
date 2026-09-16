@@ -11,16 +11,21 @@ export function LegendPanel() {
   const {
     sitePdf, activeView, setActiveView, symbols, confidenceThreshold, isSearching, searchProgress, searchProgressPercent,
     manualModeSymbolId, setIsCropMode, isCropMode, removeSymbol, updateSymbolName, updateSymbolColor, toggleSymbolVisibility,
-    toggleSelectedForSearch, appendSymbolMatches, clearSymbolMatchesByTemplate, markSearched, setIsSearching, setSearchProgress,
+    toggleSelectedForSearch, setIsSearching, setSearchProgress,
     setSearchProgressPercent, setManualModeSymbolId, markUnsearched, setFocusMatch, pdfLoading, pdfLoadingMessage,
     addCountedSymbol,
     armSymbol,
     armIds,
+    appendMatchesById,
+    clearMatchesById,
+    markSearchedById,
+    setVariantTarget,
   } = useAppStore();
 
   const activePdf = sitePdf;
-  const totalMatches = symbols.reduce((sum, s) => sum + s.matches.length, 0);
-  const hasResults = totalMatches > 0;
+  const totalMatches = symbols.reduce((sum, s) => sum + s.matches.filter((m) => !m.review).length, 0);
+  const totalReview = symbols.reduce((sum, s) => sum + s.matches.filter((m) => m.review).length, 0);
+  const hasResults = totalMatches > 0 || totalReview > 0;
   const abortRef = useRef<AbortController | null>(null);
 
   // --- AI count ---
@@ -52,7 +57,7 @@ export function LegendPanel() {
     seededFor.current = openPdfId;
     setSymbols(ctx.legendItems.map((li) => ({
       id: uuidv4(), name: li.name, color: li.color, thumbnail: li.thumbnail, templateId: li.templateId,
-      cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: false, queued: false,
+      cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: false, queued: false, variants: li.variants ?? [],
     })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openPdfId, isLegendSheet]);
@@ -89,18 +94,24 @@ export function LegendPanel() {
   const runCount = (toSearch: SymbolTemplate[]) => {
     if (!sitePdf || toSearch.length === 0) return;
     const pages = Array.from({ length: sitePdf.pageCount }, (_, i) => i + 1);
-    const totalWork = pages.length * toSearch.length;
+    // one search entry per template: the item's own plus each variant, all landing on the item
+    const entries = toSearch.flatMap((s) => [
+      { tpl: s.templateId, symId: s.id, name: s.name },
+      ...(s.variants ?? []).map((v) => ({ tpl: v.templateId, symId: s.id, name: s.name })),
+    ]);
+    const bySymbol: Record<string, string> = Object.fromEntries(entries.map((e) => [e.tpl, e.symId]));
+    const totalWork = pages.length * entries.length;
 
     setIsSearching(true);
     setSearchProgress('Counting…');
     setSearchProgressPercent(0);
-    for (const s of toSearch) clearSymbolMatchesByTemplate(s.templateId);
+    for (const s of toSearch) clearMatchesById(s.id);
 
     let completed = 0;
     abortRef.current = runSearchStream(
       {
         pdf_id: sitePdf.pdfId,
-        symbols: toSearch.map((s) => ({ template_id: s.templateId, symbol_name: s.name })),
+        symbols: entries.map((e) => ({ template_id: e.tpl, symbol_name: e.name })),
         confidence_threshold: confidenceThreshold,
         pages,
       },
@@ -111,11 +122,12 @@ export function LegendPanel() {
         },
         onSymbolComplete: (data) => {
           completed++;
-          if (data.matches.length > 0) appendSymbolMatches(data.template_id, data.matches);
+          const symId = bySymbol[data.template_id];
+          if (symId && data.matches.length > 0) appendMatchesById(symId, data.matches);
           setSearchProgressPercent(Math.round((completed / totalWork) * 100));
         },
         onDone: () => {
-          for (const s of toSearch) markSearched(s.templateId);
+          for (const s of toSearch) markSearchedById(s.id);
           setSearchProgressPercent(100);
           setSearchProgress(null);
           setIsSearching(false);
@@ -123,8 +135,7 @@ export function LegendPanel() {
         },
         onError: (err) => {
           console.error('Count failed:', err);
-          // mark as counted (0) so we don't retry in a loop; "re-count" on the row tries again
-          for (const s of toSearch) markSearched(s.templateId);
+          for (const s of toSearch) markSearchedById(s.id);
           setSearchProgress('Count failed — use re-count on the item to try again');
           setIsSearching(false);
           abortRef.current = null;
@@ -149,7 +160,7 @@ export function LegendPanel() {
     try {
       await exportResults({
         pdf_id: sitePdf.pdfId,
-        results: resultsPayload().map((s) => ({ template_id: s.templateId, symbol_name: s.name, matches: s.matches, total_count: s.matches.length })),
+        results: resultsPayload().map((s) => ({ template_id: s.templateId, symbol_name: s.name, matches: s.matches.filter((m) => !m.review), total_count: s.matches.filter((m) => !m.review).length })),
         format: 'csv',
       });
     } catch (err) { console.error('Export failed:', err); alert('Export failed'); }
@@ -159,7 +170,7 @@ export function LegendPanel() {
     pdf_id: sitePdf!.pdfId,
     symbols: resultsPayload().map((s) => ({
       name: s.name, color: s.color,
-      matches: s.matches.map((m) => ({ page: m.page, x: m.x, y: m.y, width: m.width, height: m.height })),
+      matches: s.matches.filter((m) => !m.review).map((m) => ({ page: m.page, x: m.x, y: m.y, width: m.width, height: m.height })),
     })),
   });
   const handleSavePdf = async () => {
@@ -167,6 +178,23 @@ export function LegendPanel() {
     try { await saveAnnotatedPdf(annotationPayload(), 'download', `annotated_${sitePdf.filename || 'document'}`); }
     catch (err) { console.error('Save failed:', err); alert('Failed to save annotated PDF'); }
   };
+  const handleExportYolo = async () => {
+    if (!sitePdf || !hasResults) return;
+    try {
+      const res = await fetch(`/api/export-yolo`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(annotationPayload()),
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `training_${sitePdf.pdfId}.zip`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) { console.error(err); alert('YOLO export failed'); }
+  };
+
   const handlePrint = async () => {
     if (!sitePdf || !hasResults) return;
     try { await saveAnnotatedPdf(annotationPayload(), 'print'); }
@@ -302,6 +330,7 @@ export function LegendPanel() {
             onToggleManualMode={() => setManualModeSymbolId(manualModeSymbolId === symbol.id ? null : symbol.id)}
             onMarkUnsearched={() => markUnsearched(symbol.id)}
             onCount={() => armSymbol(symbol.id)}
+            onAddVariant={() => { setVariantTarget(symbol.id); setIsCropMode(true); }}
             isManualMode={manualModeSymbolId === symbol.id}
           />
         ))}
@@ -312,11 +341,13 @@ export function LegendPanel() {
           <div className="text-center">
             <span className="text-sm font-semibold text-white">{totalMatches} items found</span>
             <span className="text-xs text-[#aab2c4] ml-1">across {symbols.filter((s) => s.matches.length > 0).length} types</span>
+            {totalReview > 0 && <span className="block text-xs text-amber-400 mt-0.5">{totalReview} uncertain — dashed on the drawing, click one to confirm, double-click to reject</span>}
           </div>
           <div className="flex gap-2">
             <button onClick={handleSavePdf} className="flex-1 h-9 rounded-md bg-[#2f3649] hover:bg-[#3a4358] border border-[#3a4156] text-xs font-semibold text-white cursor-pointer">Save PDF</button>
             <button onClick={handlePrint} className="flex-1 h-9 rounded-md bg-[#2f3649] hover:bg-[#3a4358] border border-[#3a4156] text-xs font-semibold text-white cursor-pointer">Print</button>
             <button onClick={handleExportCsv} className="flex-1 h-9 rounded-md bg-[#2f3649] hover:bg-[#3a4358] border border-[#3a4156] text-xs font-semibold text-white cursor-pointer">Export CSV</button>
+            <button onClick={handleExportYolo} title="Sheet image + YOLO labels of the confirmed counts, for training a detector" className="flex-1 h-9 rounded-md bg-[#2f3649] hover:bg-[#3a4358] border border-[#3a4156] text-xs font-semibold text-white cursor-pointer">Export YOLO</button>
           </div>
         </div>
       )}

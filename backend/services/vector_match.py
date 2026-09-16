@@ -362,6 +362,11 @@ LAST_DEBUG: dict = {}
 
 
 def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: float | None = None) -> list[dict]:
+    """Confirmed matches only (backwards-compatible wrapper)."""
+    return find_instances_full(pdf_id, geom, min_score, max_extra)[0]
+
+
+def find_instances_full(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: float | None = None):
     """All occurrences of the boxed symbol on the sheet.
 
     CAD model: a symbol is a block (geometry that recurs at a fixed offset) plus attributes
@@ -424,6 +429,7 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
             logger.info("template: block %d segs, %d attributes (%d segs), %d clutter segs (from %d hits)",
                         len(core), len(attrs), sum(len(a) for a in attrs), n_clutter, len(hits))
 
+    REVIEW_MIN = 0.65  # candidates between here and min_score become review suggestions
     RESCUE_MIN = 0.55  # exact-segment score floor; near-misses are rescued by chamfer below
     hits, masks, worlds = _hypotheses(idx, core, RESCUE_MIN)
     hits, masks, worlds = _dedupe(hits, masks, worlds)
@@ -441,7 +447,7 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
                 if _covered(idx, W[k, 0], W[k, 1], W[k, 2], W[k, 3]):
                     mk[k] = True
             sc = float(clen[mk].sum()) / max(core_len, 1e-9)
-            if sc < min_score:
+            if sc < REVIEW_MIN:
                 continue
         resc[0].append((sc, x0, y0, x1, y1)); resc[1].append(mk); resc[2].append(W)
     hits, masks, worlds = resc
@@ -492,7 +498,8 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
         return miss / max(core_len, 1e-6)
 
     out = []
-    dbg = {"n_core": len(core), "n_attr": sum(len(a) for a in attrs), "n_tpl": len(T), "base_extra": base_extra, "eff_extra": round(eff_extra, 2), "cands": []}
+    review = []
+    dbg = {"n_core": len(core), "n_attr": sum(len(a) for a in attrs), "n_tpl": len(T), "base_extra": base_extra, "eff_extra": round(eff_extra if eff_extra != float("inf") else 99, 2), "cands": []}
     for (sc, x0, y0, x1, y1), mk, W in zip(hits, masks, worlds):
         a_sc = attr_gate((x0, y0, x1, y1))
         matched_len = float(clen[mk].sum()) + attr_len * min(1.0, a_sc)
@@ -507,13 +514,20 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
             words_ok = (ws == twords) if ws else True
         gate = "ok" if (a_sc >= 1.0 and extra <= eff_extra and imiss <= 0.04 and words_ok) else ("attr" if a_sc < 1.0 else ("imiss" if imiss > 0.04 else ("extra" if extra > eff_extra else "words")))
         dbg["cands"].append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "core": round(sc, 2), "attr": round(a_sc, 2), "extra": round(extra, 2), "imiss": round(imiss, 2), "gate": gate})
-        if gate != "ok":
-            continue
-        out.append({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "confidence": round(min(sc, min(1.0, a_sc)), 3)})
+        cand = {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "confidence": round(min(sc, min(1.0, a_sc)), 3)}
+        if gate == "ok" and sc >= min_score:
+            out.append(cand)
+        elif imiss <= 0.06 and words_ok and (sc >= REVIEW_MIN or gate in ("attr", "extra")):
+            # geometrically plausible but below the bar (or gated): flag for human review
+            review.append(cand)
     LAST_DEBUG.clear(); LAST_DEBUG.update(dbg)
-    logger.info("vector search %s: %d segs (block %d, attrs %d) -> %d matches in %.2fs",
-                pdf_id, len(T), len(core), len(attrs), len(out), time.time() - t0)
-    return out
+    # review boxes overlapping a confirmed match are duplicates, not questions
+    review = [r for r in review
+              if not any(abs(r["x"] + r["width"] / 2 - (o["x"] + o["width"] / 2)) < max(2.0, o["width"] / 2)
+                         and abs(r["y"] + r["height"] / 2 - (o["y"] + o["height"] / 2)) < max(2.0, o["height"] / 2) for o in out)][:60]
+    logger.info("vector search %s: %d segs (block %d, attrs %d) -> %d matches + %d review in %.2fs",
+                pdf_id, len(T), len(core), len(attrs), len(out), len(review), time.time() - t0)
+    return out, review
 
 
 def merge_matches(vector: list[dict], raster: list[dict], raster_min_conf: float = 0.9) -> list[dict]:

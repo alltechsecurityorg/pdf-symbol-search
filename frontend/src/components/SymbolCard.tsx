@@ -12,6 +12,7 @@ interface SymbolCardProps {
   onToggleManualMode: () => void;
   onMarkUnsearched: () => void;
   onCount: () => void;
+  onAddVariant: () => void;
   isManualMode: boolean;
 }
 
@@ -24,7 +25,7 @@ const ico = 'w-4 h-4';
 const act = 'w-7 h-7 rounded flex items-center justify-center text-[#8a92a6] hover:text-white hover:bg-[#2c3245] cursor-pointer';
 
 export function SymbolCard({
-  symbol, onToggleVisibility, onDelete, onUpdateName, onUpdateColor, onCycleMatch, onToggleSelectedForSearch, onToggleManualMode, onMarkUnsearched, onCount, isManualMode,
+  symbol, onToggleVisibility, onDelete, onUpdateName, onUpdateColor, onCycleMatch, onToggleSelectedForSearch, onToggleManualMode, onMarkUnsearched, onCount, onAddVariant, isManualMode,
 }: SymbolCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(symbol.name);
@@ -32,7 +33,8 @@ export function SymbolCard({
   const [open, setOpen] = useState(true);
   const [idx, setIdx] = useState(0);
 
-  const count = symbol.matches.length;
+  const count = symbol.matches.filter((m) => !m.review).length;
+  const reviewN = symbol.matches.filter((m) => m.review).length;
   const unnamed = /^Unnamed item( \d+)?$/.test(symbol.name);
 
   const submitName = () => { onUpdateName(editName.trim() || symbol.name); setIsEditing(false); };
@@ -88,9 +90,12 @@ export function SymbolCard({
           </button>
         </div>
         {symbol.searched ? (
-          <button onClick={cycle} title={count ? 'Jump to next match' : 'None found'} className={`min-w-6 text-right text-[15px] font-bold tabular-nums ${count ? 'text-white cursor-pointer hover:text-orange-400' : 'text-[#6b7280] cursor-default'}`}>
-            {count}
-          </button>
+          <span className="flex items-baseline gap-1">
+            {reviewN > 0 && <span className="text-[11px] font-bold text-amber-400" title={`${reviewN} uncertain — click them on the drawing to confirm`}>{reviewN}?</span>}
+            <button onClick={cycle} title={count ? 'Jump to next match' : 'None found'} className={`min-w-6 text-right text-[15px] font-bold tabular-nums ${count ? 'text-white cursor-pointer hover:text-orange-400' : 'text-[#6b7280] cursor-default'}`}>
+              {count}
+            </button>
+          </span>
         ) : symbol.queued ? (
           <svg className="w-4 h-4 animate-spin shrink-0" viewBox="0 0 50 50" fill="none" aria-label="Counting"><circle cx="25" cy="25" r="20" stroke="#2c3245" strokeWidth="7"/><path d="M45 25a20 20 0 0 0-20-20" stroke="#f97316" strokeWidth="7" strokeLinecap="round"/></svg>
         ) : (
@@ -105,9 +110,9 @@ export function SymbolCard({
         </button>
       </div>
 
-      {/* body: template thumbnail(s) with their counts */}
+      {/* body: template + variant thumbnails, and an add-variant tile */}
       {open && (
-        <div className="flex gap-2 pl-8 pr-3 pb-3">
+        <div className="flex gap-2 pl-8 pr-3 pb-3 flex-wrap">
           <button onClick={cycle} className="relative w-14 cursor-pointer" title={symbol.searched ? `${count} found` : 'Not counted yet'}>
             <div className="w-14 h-14 bg-white rounded-t-sm flex items-center justify-center p-1">
               <img src={symbol.thumbnail} alt="" className="max-w-full max-h-full object-contain" />
@@ -117,6 +122,18 @@ export function SymbolCard({
               <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-amber-400 text-black text-[10px] font-black flex items-center justify-center shadow" title="Not counted yet">!</span>
             )}
           </button>
+          {(symbol.variants ?? []).map((v) => (
+            <div key={v.templateId} className="w-14" title="Variant — counted under this item">
+              <div className="w-14 h-14 bg-white rounded-sm flex items-center justify-center p-1">
+                <img src={v.thumbnail} alt="" className="max-w-full max-h-full object-contain" />
+              </div>
+            </div>
+          ))}
+          <button
+            onClick={onAddVariant}
+            title="Add a variant: box another way this symbol is drawn — its matches count under this item"
+            className="w-14 h-14 rounded-sm border-2 border-dashed border-[#4b5364] text-[#8a92a6] hover:text-white hover:border-[#6b7590] text-xl cursor-pointer"
+          >+</button>
         </div>
       )}
     </div>

@@ -9,6 +9,13 @@ export interface SymbolMatch {
   height: number;
   confidence: number;
   manual?: boolean;
+  review?: boolean; // flagged uncertain: shown dashed, excluded from counts until confirmed
+}
+
+export interface SymbolVariant {
+  templateId: string;
+  thumbnail: string;
+  cropRegion: { page: number; x: number; y: number; width: number; height: number };
 }
 
 export interface SymbolTemplate {
@@ -29,6 +36,7 @@ export interface SymbolTemplate {
   searched: boolean;
   selectedForSearch: boolean; // row checkbox: a user-chosen subset for the next run
   queued: boolean;            // waiting for / being processed by the counter
+  variants?: SymbolVariant[]; // extra templates counted under this item (drawing-style variants)
 }
 
 export interface PdfInfo {
@@ -74,6 +82,13 @@ interface AppState {
   armSymbol: (id: string) => void;
   armAll: () => void;
   armIds: (ids: string[]) => void;
+  addVariant: (symbolId: string, v: SymbolVariant) => void;
+  confirmMatch: (symbolId: string, matchIndex: number) => void;
+  appendMatchesById: (symbolId: string, matches: SymbolMatch[]) => void;
+  clearMatchesById: (symbolId: string) => void;
+  markSearchedById: (symbolId: string) => void;
+  variantTarget: string | null;
+  setVariantTarget: (id: string | null) => void;
   removeSymbol: (id: string) => void;
   updateSymbolName: (id: string, name: string) => void;
   updateSymbolColor: (id: string, color: string) => void;
@@ -123,6 +138,7 @@ const initialState = {
   panelCollapsed: false,
   undoStack: [] as UndoAction[],
   focusMatch: null as AppState['focusMatch'],
+  variantTarget: null as string | null,
   pdfLoading: false,
   pdfLoadingMessage: '',
   hideBackground: false,
@@ -154,6 +170,26 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({ symbols: state.symbols.map((s) => (s.searched ? s : { ...s, queued: true })) })),
   armIds: (ids) =>
     set((state) => ({ symbols: state.symbols.map((s) => (ids.includes(s.id) ? { ...s, queued: true, searched: false } : s)) })),
+
+  addVariant: (symbolId, v) =>
+    set((state) => ({ symbols: state.symbols.map((s) => (s.id === symbolId ? { ...s, variants: [...(s.variants ?? []), v] } : s)) })),
+  confirmMatch: (symbolId, matchIndex) =>
+    set((state) => ({ symbols: state.symbols.map((s) => (s.id === symbolId
+      ? { ...s, matches: s.matches.map((m, i) => (i === matchIndex ? { ...m, review: false, confidence: 1 } : m)) } : s)) })),
+  appendMatchesById: (symbolId, matches) =>
+    set((state) => ({ symbols: state.symbols.map((s) => {
+      if (s.id !== symbolId) return s;
+      // dedupe across variants: skip incoming matches whose centre lies in an existing box
+      const fresh = matches.filter((m) => !s.matches.some((o) =>
+        o.x <= m.x + m.width / 2 && m.x + m.width / 2 <= o.x + o.width &&
+        o.y <= m.y + m.height / 2 && m.y + m.height / 2 <= o.y + o.height));
+      return { ...s, matches: [...s.matches, ...fresh] };
+    }) })),
+  clearMatchesById: (symbolId) =>
+    set((state) => ({ symbols: state.symbols.map((s) => (s.id === symbolId ? { ...s, matches: [] } : s)) })),
+  markSearchedById: (symbolId) =>
+    set((state) => ({ symbols: state.symbols.map((s) => (s.id === symbolId ? { ...s, searched: true, queued: false } : s)) })),
+  setVariantTarget: (id) => set({ variantTarget: id }),
 
   // AI-counted items arrive with their matches already found - never re-queued for auto-count
   addCountedSymbol: (symbol) =>

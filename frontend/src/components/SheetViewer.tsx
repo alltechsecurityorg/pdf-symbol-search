@@ -19,6 +19,10 @@ export function SheetViewer() {
   const setManualModeSymbolId = useAppStore((s) => s.setManualModeSymbolId);
   const addSymbol = useAppStore((s) => s.addSymbol);
   const addCountedSymbol = useAppStore((s) => s.addCountedSymbol);
+  const addVariant = useAppStore((s) => s.addVariant);
+  const confirmMatch = useAppStore((s) => s.confirmMatch);
+  const setVariantTarget = useAppStore((s) => s.setVariantTarget);
+  const armSymbol = useAppStore((s) => s.armSymbol);
   const addManualMatch = useAppStore((s) => s.addManualMatch);
   const removeMatch = useAppStore((s) => s.removeMatch);
   const undo = useAppStore((s) => s.undo);
@@ -201,6 +205,13 @@ export function SheetViewer() {
         if (m.page !== 1) continue;
         const a = ptToEl(m.x, m.y), b = ptToEl(m.x + m.width, m.y + m.height);
         if (b.x < -50 || b.y < -50 || a.x > w + 50 || a.y > h + 50) continue;
+        if (m.review) {
+          // uncertain: dashed amber box, no tint - click confirms, double-click rejects
+          ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]);
+          ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4);
+          ctx.setLineDash([]);
+          continue;
+        }
         const key = `${m.x.toFixed(2)},${m.y.toFixed(2)},${m.width.toFixed(2)},${m.height.toFixed(2)}:${s.color}:${variant}`;
         let entries = maskCache.current.get(key);
         if (!entries) { entries = new Map(); maskCache.current.set(key, entries); }
@@ -315,6 +326,16 @@ export function SheetViewer() {
       viewer.addHandler('canvas-drag-end', () => { viewerRef.current?.viewport.applyConstraints(); });
       viewer.addHandler('update-viewport', () => { drawSoon(); updateZoomPct(); });
       viewer.addHandler('resize', () => { drawSoon(); });
+      viewer.addHandler('canvas-click', (e) => {
+        if (!e.quick) return;
+        const p = elToPt(e.position.x, e.position.y);
+        const st = useAppStore.getState();
+        for (const s of st.symbols) {
+          if (!s.visible) continue;
+          const i = s.matches.findIndex((m) => m.review && m.page === 1 && p.x >= m.x - 1 && p.x <= m.x + m.width + 1 && p.y >= m.y - 1 && p.y <= m.y + m.height + 1);
+          if (i >= 0) { confirmMatch(s.id, i); drawSoon(); return; }
+        }
+      });
       viewer.addHandler('canvas-double-click', (e) => {
         const p = elToPt(e.position.x, e.position.y);
         const syms = useAppStore.getState().symbols;
@@ -383,6 +404,26 @@ export function SheetViewer() {
           const used = useAppStore.getState().symbols.map((s) => s.color);
           return PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[used.length % PRESET_COLORS.length];
         };
+        const vt = useAppStore.getState().variantTarget;
+        if (vt) {
+          // adding a drawing-style variant to an existing item
+          const r = await cropSymbol({ pdf_id: pdfId, page: 1, x, y, width, height });
+          const v = { templateId: r.template_id, thumbnail: r.thumbnail_base64, cropRegion: { page: 1, x, y, width, height } };
+          addVariant(vt, v);
+          const sym = useAppStore.getState().symbols.find((sx) => sx.id === vt);
+          // write through to the discipline legend when this item came from it
+          if (sym) {
+            const ps = useProjectStore.getState();
+            const t = ps.projects.find((pp) => pp.id === ps.openProjectId)?.takeoffs.find((tt) => tt.id === ps.openTakeoffId);
+            const dd = t?.disciplines.find((ddd) => ddd.pdfs.some((f) => f.pdfId === ps.openPdfId));
+            if (dd && (dd.legendItems ?? []).some((li) => li.templateId === sym.templateId))
+              ps.addLegendVariant(ps.openProjectId!, ps.openTakeoffId!, dd.id, sym.templateId, v);
+            armSymbol(vt); // re-count the item including the new variant
+          }
+          setVariantTarget(null);
+          setIsCropMode(false);
+          return;
+        }
         if (legendCtx) {
           // On the legend sheet a box may cover a whole section: the server splits it into
           // one entry per legend row (glyph + name where the sheet has real text).
