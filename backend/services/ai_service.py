@@ -47,25 +47,34 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}}},
 ]
 
-SYSTEM = """You are an expert electrical/security takeoff assistant working on one drawing sheet.
-Your job: identify every distinct COUNTABLE point symbol on the sheet and count each type.
+SYSTEM_COMMON = """You are an expert electrical/security takeoff assistant working on one drawing sheet.
 
 Method (follow strictly):
-1. Study the overview. If the sheet has a legend, view it up close and use its names.
-2. Work out the distinct symbol types present in the drawing area (ignore title block, notes, grids, dimensions, room labels).
-3. For each type: get_view a close-up of one clean instance, then call count_symbol with a TIGHT box
-   around exactly that one instance. The counter is exact-geometry: your box quality decides everything.
-4. Sanity-check each returned count against what you see; re-try a type once with a better box if it looks wrong.
-5. Re-counting with a name you already used REPLACES that earlier count - do this to fix a bad box.
-6. call finish with a summary.
+- For each target symbol type: get_view a close-up of one clean instance in the DRAWING AREA, then call
+  count_symbol with a TIGHT box around exactly that one instance. The counter is exact-geometry: your
+  box quality decides everything.
+- Sanity-check each returned count against what you see; re-try a type once with a better box if it
+  looks wrong. Re-counting with a name you already used REPLACES that earlier count.
+- When every target is handled, call finish with a summary (mention any target that does not appear).
 
 Rules:
 - All coordinates are PDF points, origin top-left, y increases downward. Every view's caption tells you
   the exact region it covers - derive coordinates from that.
 - Never estimate counts visually; only count_symbol counts.
-- Do not count the legend's own sample symbols; count_symbol already excludes nothing, so box instances
-  from the drawing area, not the legend.
+- Box instances from the drawing area, never the legend's own sample symbols.
+- Count ONLY the target symbol types. Do not add other symbols you happen to notice.
 - Be economical: few, purposeful views."""
+
+SYSTEM_TARGETS = SYSTEM_COMMON + """
+
+Your targets are EXACTLY the reference symbols provided (each with its name and image, possibly cropped
+from a legend or a different sheet). Use each name verbatim in count_symbol."""
+
+SYSTEM_LEGEND = SYSTEM_COMMON + """
+
+Your targets are EXACTLY the symbol types defined in this sheet's legend table. First locate the legend
+and view it up close; use the legend's own names. If the sheet has no legend, call finish immediately
+saying a legend could not be found and nothing was counted."""
 
 
 def _png_msg(png: bytes, caption: str) -> dict:
@@ -80,8 +89,11 @@ def _view_png(pdf_id: str, x: float, y: float, w: float, h: float) -> bytes:
     return render_clip(pdf_id, x, y, w, h, z, pad=1.0)
 
 
-def run_ai_count(pdf_id: str):
-    """Generator of event dicts: status / item / done / error."""
+def run_ai_count(pdf_id: str, targets: list | None = None):
+    """Generator of event dicts: status / item / done / error.
+
+    targets: [{name, thumbnail(data URL)}] restricts the run to those symbols;
+    without targets the run is restricted to the sheet's own legend."""
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         yield {"type": "error", "detail": "OPENROUTER_API_KEY not configured"}
@@ -93,10 +105,17 @@ def run_ai_count(pdf_id: str):
     W, H = rect.width, rect.height
 
     overview = _view_png(pdf_id, 0, 0, W, H)
+    targets = [t for t in (targets or []) if t.get("name") and t.get("thumbnail")]
     messages = [
-        {"role": "system", "content": SYSTEM},
+        {"role": "system", "content": SYSTEM_TARGETS if targets else SYSTEM_LEGEND},
         _png_msg(overview, f"Overview of the sheet. It covers x 0..{W:.0f}, y 0..{H:.0f} PDF points."),
     ]
+    if targets:
+        content = [{"type": "text", "text": f"Count ONLY these {len(targets)} symbol types:"}]
+        for t in targets:
+            content.append({"type": "text", "text": f"Target: {str(t['name'])[:60]}"})
+            content.append({"type": "image_url", "image_url": {"url": t["thumbnail"]}})
+        messages.append({"role": "user", "content": content})
 
     total_cost = 0.0
     items = 0

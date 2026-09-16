@@ -25,8 +25,10 @@ export function LegendPanel() {
   const log = (t: string) => setAiLog((l) => [...l.slice(-3), t]);
   const startAi = () => {
     if (!sitePdf || aiBusy) return;
-    setAiBusy(true); setAiLog(['Starting AI count…']);
-    aiAbort.current = runAiCount(sitePdf.pdfId, {
+    const targets = useAppStore.getState().symbols.map((x) => ({ name: x.name, thumbnail: x.thumbnail }));
+    setAiBusy(true);
+    setAiLog([targets.length ? `Finding your ${targets.length} symbol${targets.length === 1 ? '' : 's'}…` : 'Reading the legend…']);
+    aiAbort.current = runAiCount(sitePdf.pdfId, targets, {
       onStatus: (t) => log(t),
       onItem: (it) => {
         const st = useAppStore.getState();
@@ -173,7 +175,7 @@ export function LegendPanel() {
             <span className="text-xl">✨</span>
             <span>
               <span className="block text-[14px] font-bold text-white">AI count <span className="text-[11px] font-semibold text-sky-400 align-middle ml-1">BETA</span></span>
-              <span className="block text-[12px] text-[#8a92a6] mt-0.5">AI reads the sheet and counts every symbol type for you.</span>
+              <span className="block text-[12px] text-[#8a92a6] mt-0.5">{symbols.length ? `AI finds and counts your ${symbols.length} selected symbol${symbols.length === 1 ? '' : 's'} on this sheet.` : 'AI counts the symbol types from this sheet\u2019s legend.'}</span>
             </span>
           </button>
         ) : (

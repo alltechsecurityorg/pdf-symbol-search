@@ -19,6 +19,7 @@ from models.schemas import (
     ExportRequest,
     UploadResponse,
     AnnotateRequest,
+    AiCountRequest,
     PageInfo,
     SplitRequest,
     SplitItem,
@@ -384,15 +385,17 @@ async def pdf_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float
 
 
 @app.post("/api/ai-count/{pdf_id}")
-async def ai_count(pdf_id: str):
-    """Agentic AI takeoff on one sheet: streams status / item / done events."""
+async def ai_count(pdf_id: str, request: AiCountRequest | None = None):
+    """Agentic AI takeoff on one sheet, restricted to the given targets (or the
+    sheet's legend when none are given). Streams status / item / done events."""
     try:
         get_pdf_path(pdf_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="PDF not found")
+    targets = [t.model_dump() for t in (request.targets if request else [])]
 
     async def gen():
-        async for ev in iterate_in_threadpool(run_ai_count(pdf_id)):
+        async for ev in iterate_in_threadpool(run_ai_count(pdf_id, targets)):
             yield {"event": ev.get("type", "status"), "data": json.dumps(ev)}
 
     return EventSourceResponse(gen())

@@ -100,3 +100,12 @@ class SplitItem(BaseModel):
     filename: str
     page_count: int
     page_sizes: list[dict]
+
+
+class AiTarget(BaseModel):
+    name: str
+    thumbnail: str  # data URL
+
+
+class AiCountRequest(BaseModel):
+    targets: list[AiTarget] = []
