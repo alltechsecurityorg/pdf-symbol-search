@@ -34,6 +34,7 @@ from services.export_service import export_csv
 from services.tile_service import prepare as prepare_tiles, status as tiles_status, TILES_DIR
 from services.vector_match import load_geometry, find_instances, merge_matches
 from services.ai_service import run_ai_count
+from services.legend_service import extract_legend
 from starlette.concurrency import iterate_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from utils.coordinates import SCALE_FACTOR
@@ -405,6 +406,17 @@ async def ai_count(pdf_id: str, request: AiCountRequest | None = None):
             yield {"event": ev.get("type", "status"), "data": json.dumps(ev)}
 
     return EventSourceResponse(gen())
+
+
+@app.post("/api/legend-extract")
+async def legend_extract(request: CropRequest):
+    """Split a boxed legend region into entries: one glyph + name per row."""
+    try:
+        get_pdf_path(request.pdf_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    items = await run_in_thread(extract_legend, request.pdf_id, request.x, request.y, request.width, request.height)
+    return {"items": items}
 
 
 @app.get("/api/pdf/{pdf_id}/words")

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import OpenSeadragon from 'openseadragon';
 import { useAppStore } from '../store/appStore';
-import { cropSymbol, prepareTiles, getTilesStatus, tileSourceUrl, getWords, type TilesStatus } from '../api/client';
+import { cropSymbol, prepareTiles, getTilesStatus, tileSourceUrl, extractLegend, type TilesStatus } from '../api/client';
 import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { PRESET_COLORS } from './SymbolCard';
@@ -375,26 +375,29 @@ export function SheetViewer() {
       const x = a.x, y = a.y, width = b.x - a.x, height = b.y - a.y;
       if (width < 3 || height < 3) return;
       try {
-        const r = await cropSymbol({ pdf_id: pdfId, page: 1, x, y, width, height });
-        const existing = useAppStore.getState().symbols;
-        const used = existing.map((s) => s.color);
-        const color = PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[existing.length % PRESET_COLORS.length];
-        let name = '';
+        const nextName = () => {
+          const n = useAppStore.getState().symbols.filter((s) => /^Unnamed item( \d+)?$/.test(s.name)).length;
+          return n === 0 ? 'Unnamed item' : `Unnamed item ${n + 1}`;
+        };
+        const nextColor = () => {
+          const used = useAppStore.getState().symbols.map((s) => s.color);
+          return PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[used.length % PRESET_COLORS.length];
+        };
         if (legendCtx) {
-          // legend rows put the description to the right of the symbol - use it as the name
-          const words = await getWords(pdfId, x + width, y - 2, x + width + 260, y + height + 2).catch(() => []);
-          name = words.join(' ').trim().slice(0, 60);
-        }
-        if (!name) {
-          const unnamed = existing.filter((s) => /^Unnamed item( \d+)?$/.test(s.name)).length;
-          name = unnamed === 0 ? 'Unnamed item' : `Unnamed item ${unnamed + 1}`;
-        }
-        if (legendCtx) {
-          addCountedSymbol({ name, color, thumbnail: r.thumbnail_base64, templateId: r.template_id, cropRegion: { page: 1, x, y, width, height }, matches: [] });
-          addLegendItem(legendCtx.projectId, legendCtx.takeoffId, legendCtx.disciplineId,
-            { name, color, thumbnail: r.thumbnail_base64, templateId: r.template_id, cropRegion: { page: 1, x, y, width, height } });
+          // On the legend sheet a box may cover a whole section: the server splits it into
+          // one entry per legend row (glyph + name where the sheet has real text).
+          const entries = await extractLegend(pdfId, x, y, width, height);
+          if (entries.length === 0) { alert('No legend symbols recognised in that box.'); return; }
+          for (const e of entries) {
+            const name = e.name || nextName();
+            const color = nextColor();
+            addCountedSymbol({ name, color, thumbnail: e.thumbnail_base64, templateId: e.template_id, cropRegion: e.crop, matches: [] });
+            addLegendItem(legendCtx.projectId, legendCtx.takeoffId, legendCtx.disciplineId,
+              { name, color, thumbnail: e.thumbnail_base64, templateId: e.template_id, cropRegion: e.crop });
+          }
         } else {
-          addSymbol({ name, color, thumbnail: r.thumbnail_base64, templateId: r.template_id, cropRegion: { page: 1, x, y, width, height } });
+          const r = await cropSymbol({ pdf_id: pdfId, page: 1, x, y, width, height });
+          addSymbol({ name: nextName(), color: nextColor(), thumbnail: r.thumbnail_base64, templateId: r.template_id, cropRegion: { page: 1, x, y, width, height } });
         }
       } catch (err) { alert(err instanceof Error ? err.message : 'Failed to crop item'); }
     } else if (manualModeSymbolId) {

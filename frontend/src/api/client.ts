@@ -306,3 +306,16 @@ export async function getWords(pdfId: string, x0: number, y0: number, x1: number
   const d = await res.json() as { words: { text: string }[] };
   return d.words.map((w) => w.text);
 }
+
+export interface LegendEntry {
+  template_id: string; thumbnail_base64: string; name: string;
+  crop: { page: number; x: number; y: number; width: number; height: number };
+}
+export async function extractLegend(pdfId: string, x: number, y: number, width: number, height: number): Promise<LegendEntry[]> {
+  const res = await fetch(`${API_BASE}/legend-extract`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pdf_id: pdfId, page: 1, x, y, width, height }),
+  });
+  if (!res.ok) throw new Error('Legend extraction failed');
+  return ((await res.json()) as { items: LegendEntry[] }).items;
+}

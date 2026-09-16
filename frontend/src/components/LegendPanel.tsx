@@ -196,7 +196,7 @@ export function LegendPanel() {
             </svg>
             <div>
               <div className="text-[15px] font-bold text-white">{isLegendSheet ? 'Build the legend' : 'Auto-count items'}</div>
-              <div className="text-[13px] text-[#d5dbe6] mt-1 leading-snug">{isLegendSheet ? 'Drag a box over each symbol in the legend. They become the symbol set for every drawing in this discipline.' : 'Drag a box over an item to count it across all your drawings.'}</div>
+              <div className="text-[13px] text-[#d5dbe6] mt-1 leading-snug">{isLegendSheet ? 'Drag a box over a whole legend section — each row becomes its own legend symbol, used across every drawing in this discipline.' : 'Drag a box over an item to count it across all your drawings.'}</div>
               <div className="text-[12px] text-[#8a92a6] mt-1.5">{isCropMode ? 'Smart select is on — hold Space and drag to move around.' : 'Smart select is off — click to turn it on.'}</div>
             </div>
           </button>
