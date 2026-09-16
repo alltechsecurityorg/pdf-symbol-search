@@ -145,8 +145,10 @@ def _snap_box(pdf_id: str, x: float, y: float, w: float, h: float):
 
 
 def _view_png(pdf_id: str, x: float, y: float, w: float, h: float, max_px: float = 1200.0) -> bytes:
+    """Views for the agent always use the background-hidden variant: the architectural
+    underlay is pure clutter for symbol localisation (layer-less sheets get the grey filter)."""
     z = max(0.3, min(48.0, max_px / max(w, h, 1e-6)))
-    return render_clip(pdf_id, x, y, w, h, z, pad=1.0)
+    return render_clip(pdf_id, x, y, w, h, z, pad=1.0, nobg=True)
 
 
 def _prune_images(messages: list) -> None:
