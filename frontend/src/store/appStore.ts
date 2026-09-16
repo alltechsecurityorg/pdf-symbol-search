@@ -70,6 +70,8 @@ interface AppState {
   addSymbol: (symbol: Omit<SymbolTemplate, 'id' | 'visible' | 'matches' | 'searched' | 'selectedForSearch'>) => void;
   addCountedSymbol: (symbol: Omit<SymbolTemplate, 'id' | 'visible' | 'searched' | 'selectedForSearch'>) => void;
   setSymbols: (symbols: SymbolTemplate[]) => void;
+  armSymbol: (id: string) => void;
+  armAll: () => void;
   removeSymbol: (id: string) => void;
   updateSymbolName: (id: string, name: string) => void;
   updateSymbolColor: (id: string, color: string) => void;
@@ -142,6 +144,12 @@ export const useAppStore = create<AppState>((set) => ({
 
   // Replace the whole working set (used when a sheet opens with a discipline legend)
   setSymbols: (symbols) => set({ symbols, manualModeSymbolId: null, undoStack: [] }),
+
+  // Queue one / all uncounted symbols for the counter (counting is explicit, not automatic)
+  armSymbol: (id) =>
+    set((state) => ({ symbols: state.symbols.map((s) => (s.id === id ? { ...s, selectedForSearch: true } : s)) })),
+  armAll: () =>
+    set((state) => ({ symbols: state.symbols.map((s) => (s.searched ? s : { ...s, selectedForSearch: true })) })),
 
   // AI-counted items arrive with their matches already found - never re-queued for auto-count
   addCountedSymbol: (symbol) =>

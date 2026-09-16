@@ -11,6 +11,7 @@ interface SymbolCardProps {
   onToggleSelectedForSearch: () => void;
   onToggleManualMode: () => void;
   onMarkUnsearched: () => void;
+  onCount: () => void;
   isManualMode: boolean;
 }
 
@@ -23,7 +24,7 @@ const ico = 'w-4 h-4';
 const act = 'w-7 h-7 rounded flex items-center justify-center text-[#8a92a6] hover:text-white hover:bg-[#2c3245] cursor-pointer';
 
 export function SymbolCard({
-  symbol, onToggleVisibility, onDelete, onUpdateName, onUpdateColor, onCycleMatch, onToggleManualMode, onMarkUnsearched, isManualMode,
+  symbol, onToggleVisibility, onDelete, onUpdateName, onUpdateColor, onCycleMatch, onToggleManualMode, onMarkUnsearched, onCount, isManualMode,
 }: SymbolCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(symbol.name);
@@ -79,9 +80,17 @@ export function SymbolCard({
             <svg className={ico} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
           </button>
         </div>
-        <button onClick={cycle} title={count ? 'Jump to next match' : 'Not counted yet'} className={`min-w-6 text-right text-[15px] font-bold tabular-nums ${count ? 'text-white cursor-pointer hover:text-orange-400' : 'text-[#6b7280] cursor-default'}`}>
-          {count}
-        </button>
+        {symbol.searched ? (
+          <button onClick={cycle} title={count ? 'Jump to next match' : 'None found'} className={`min-w-6 text-right text-[15px] font-bold tabular-nums ${count ? 'text-white cursor-pointer hover:text-orange-400' : 'text-[#6b7280] cursor-default'}`}>
+            {count}
+          </button>
+        ) : symbol.selectedForSearch ? (
+          <svg className="w-4 h-4 animate-spin shrink-0" viewBox="0 0 50 50" fill="none" aria-label="Counting"><circle cx="25" cy="25" r="20" stroke="#2c3245" strokeWidth="7"/><path d="M45 25a20 20 0 0 0-20-20" stroke="#f97316" strokeWidth="7" strokeLinecap="round"/></svg>
+        ) : (
+          <button onClick={onCount} title="Count this symbol on the page" className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded border border-orange-500/70 text-orange-400 hover:bg-orange-500 hover:text-white cursor-pointer">
+            Count
+          </button>
+        )}
         <button onClick={onToggleVisibility} className={`w-7 h-7 flex items-center justify-center cursor-pointer ${symbol.visible ? 'text-[#d5dbe6] hover:text-white' : 'text-[#6b7280] hover:text-white'}`} title={symbol.visible ? 'Hide highlights' : 'Show highlights'}>
           {symbol.visible
             ? <svg className={ico} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>

@@ -14,6 +14,8 @@ export function LegendPanel() {
     toggleSelectedForSearch, appendSymbolMatches, clearSymbolMatchesByTemplate, markSearched, setIsSearching, setSearchProgress,
     setSearchProgressPercent, setManualModeSymbolId, markUnsearched, setFocusMatch, pdfLoading, pdfLoadingMessage,
     addCountedSymbol,
+    armSymbol,
+    armAll,
   } = useAppStore();
 
   const activePdf = sitePdf;
@@ -50,7 +52,7 @@ export function LegendPanel() {
     seededFor.current = openPdfId;
     setSymbols(ctx.legendItems.map((li) => ({
       id: uuidv4(), name: li.name, color: li.color, thumbnail: li.thumbnail, templateId: li.templateId,
-      cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: !isLegendSheet,
+      cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: false,
     })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openPdfId, isLegendSheet]);
@@ -241,6 +243,21 @@ export function LegendPanel() {
         </div>
       )}
 
+      {(() => {
+        const uncounted = symbols.filter((s) => !s.searched && !s.selectedForSearch).length;
+        return uncounted > 0 && !isLegendSheet && !pdfLoading ? (
+          <div className="px-4 pb-2">
+            <button
+              onClick={armAll}
+              disabled={isSearching}
+              className="w-full h-10 rounded-md bg-orange-500 hover:bg-orange-600 text-[14px] font-bold text-white cursor-pointer disabled:opacity-40"
+            >
+              Count {uncounted} symbol{uncounted === 1 ? '' : 's'} on this page
+            </button>
+          </div>
+        ) : null;
+      })()}
+
       {(isSearching || searchProgress) && (
         <div className="mx-4 mb-2">
           {isSearching && (
@@ -271,6 +288,7 @@ export function LegendPanel() {
             onToggleSelectedForSearch={() => toggleSelectedForSearch(symbol.id)}
             onToggleManualMode={() => setManualModeSymbolId(manualModeSymbolId === symbol.id ? null : symbol.id)}
             onMarkUnsearched={() => markUnsearched(symbol.id)}
+            onCount={() => armSymbol(symbol.id)}
             isManualMode={manualModeSymbolId === symbol.id}
           />
         ))}
