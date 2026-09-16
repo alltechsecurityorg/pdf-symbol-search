@@ -21,6 +21,29 @@ export function getPdfUrl(pdfId: string) {
   return `${API_BASE}/pdf/${pdfId}`;
 }
 
+export function getThumbUrl(pdfId: string) {
+  return `${API_BASE}/pdf/${pdfId}/thumbnail`;
+}
+
+export async function listPages(pdfId: string): Promise<{ page: number; name: string }[]> {
+  const res = await fetch(`${API_BASE}/pdf/${pdfId}/pages`);
+  if (!res.ok) throw new Error('Could not read pages');
+  return res.json();
+}
+
+export async function splitPdf(pdfId: string, pages: number[]) {
+  const res = await fetch(`${API_BASE}/split-pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pdf_id: pdfId, pages }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Split failed' }));
+    throw new Error(err.detail || 'Split failed');
+  }
+  return res.json() as Promise<{ page: number; pdf_id: string; filename: string; page_count: number; page_sizes: { page: number; width_pts: number; height_pts: number }[] }[]>;
+}
+
 export async function cropSymbol(params: {
   pdf_id: string;
   page: number;
@@ -212,4 +235,21 @@ export async function exportResults(params: {
   a.download = `symbol_results.${params.format}`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// --- Deep Zoom tiles ---
+export interface TilesStatus { ready: boolean; nobg: boolean | null; complete: boolean; running: boolean; progress: number; error: string | null;
+  meta: { width_pt: number; height_pt: number; scale: number; width_px: number; height_px: number } | null }
+export async function prepareTiles(pdfId: string): Promise<TilesStatus> {
+  const res = await fetch(`${API_BASE}/tiles/${pdfId}/prepare`, { method: 'POST' });
+  if (!res.ok) throw new Error('Could not prepare drawing');
+  return res.json();
+}
+export async function getTilesStatus(pdfId: string): Promise<TilesStatus> {
+  const res = await fetch(`${API_BASE}/tiles/${pdfId}/status`);
+  if (!res.ok) throw new Error('Could not read drawing status');
+  return res.json();
+}
+export function tileSourceUrl(pdfId: string, variant: 'base' | 'nobg') {
+  return `${API_BASE}/tilefiles/${pdfId}/${variant}/image.dzi`;
 }

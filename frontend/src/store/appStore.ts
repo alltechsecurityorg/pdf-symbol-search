@@ -59,6 +59,10 @@ interface AppState {
   searchProgressPercent: number;
   undoStack: UndoAction[];
   focusMatch: { page: number; x: number; y: number; width: number; height: number; _seq: number } | null;
+  pdfLoading: boolean;
+  pdfLoadingMessage: string;
+  hideBackground: boolean;
+  drawingScale: number;
 
   setLegendPdf: (info: PdfInfo) => void;
   setSitePdf: (info: PdfInfo) => void;
@@ -89,6 +93,10 @@ interface AppState {
   setZoomLevel: (zoom: number) => void;
   setPanelCollapsed: (collapsed: boolean) => void;
   setFocusMatch: (match: { page: number; x: number; y: number; width: number; height: number } | null) => void;
+  setPdfLoading: (v: boolean) => void;
+  setPdfLoadingMessage: (v: string) => void;
+  setHideBackground: (v: boolean) => void;
+  setDrawingScale: (v: number) => void;
   reset: () => void;
 }
 
@@ -109,13 +117,17 @@ const initialState = {
   panelCollapsed: false,
   undoStack: [] as UndoAction[],
   focusMatch: null as AppState['focusMatch'],
+  pdfLoading: false,
+  pdfLoadingMessage: '',
+  hideBackground: false,
+  drawingScale: 0,
 };
 
 export const useAppStore = create<AppState>((set) => ({
   ...initialState,
 
   setLegendPdf: (info) => set({ legendPdf: info, activeView: 'legend' }),
-  setSitePdf: (info) => set({ sitePdf: info, activeView: 'site' }),
+  setSitePdf: (info) => set({ sitePdf: info, activeView: 'site', pdfLoading: true }),
   setActiveView: (view) => set({ activeView: view }),
 
   addSymbol: (symbol) =>
@@ -268,6 +280,11 @@ export const useAppStore = create<AppState>((set) => ({
   setFocusMatch: (match) => set((state) => ({
     focusMatch: match ? { ...match, _seq: (state.focusMatch?._seq ?? 0) + 1 } : null,
   })),
+
+  setPdfLoading: (v) => set({ pdfLoading: v }),
+  setPdfLoadingMessage: (v) => set({ pdfLoadingMessage: v }),
+  setHideBackground: (v) => set({ hideBackground: v }),
+  setDrawingScale: (v) => set({ drawingScale: v }),
 
   reset: () => set(initialState),
 }));
