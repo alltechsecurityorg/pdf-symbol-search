@@ -5,15 +5,45 @@ services:
       - pdf_data:/data
     environment:
       - DATA_DIR=/data
+    networks:
+      - pss_net
     restart: unless-stopped
 
   frontend:
     build: ./frontend
     ports:
-      - "8015:80"
+      - "8015:80"          # LAN-direct handle (ungated)
     depends_on:
       - backend
+    networks:
+      - pss_net
+    restart: unless-stopped
+
+  # Public gate. frontdoor resolves shaunify.gotoalltechsecurity.com ->
+  # http://shaunify:8000, so this container MUST be named 'shaunify', listen on
+  # 8000, and join the external 'frontdoor' network. IP-gated to office WiFi + LAN.
+  gate:
+    image: nginx:alpine
+    container_name: shaunify
+    depends_on:
+      - frontend
+    volumes:
+      - ./gate.nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "127.0.0.1:8046:8000"   # local-only test handle; public path is via frontdoor
+    networks:
+      - pss_net
+      - frontdoor
     restart: unless-stopped
 
 volumes:
   pdf_data:
+
+networks:
+  pss_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.16.251.0/24
+  frontdoor:
+    external: true
