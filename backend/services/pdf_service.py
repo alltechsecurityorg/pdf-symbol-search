@@ -211,28 +211,57 @@ _dl_cache: "_OrderedDict[str, tuple]" = _OrderedDict()  # pdf_id -> (doc, displa
 _DL_MAX = 8
 
 
-def _display_list(pdf_id: str):
-    """Cached MuPDF display list for page 1 so clip renders don't re-interpret the whole page."""
-    ent = _dl_cache.get(pdf_id)
+def _display_list(pdf_id: str, nobg: bool = False):
+    """Cached MuPDF display list for page 1 so clip renders don't re-interpret the whole page.
+
+    With nobg=True the layer-off copy is used when the PDF has layers; layer-less PDFs fall
+    back to the original (the caller whitens the grey underlay in the raster instead)."""
+    key = f"{pdf_id}:{int(nobg)}"
+    ent = _dl_cache.get(key)
     if ent is None:
-        doc = fitz.open(str(get_pdf_path(pdf_id)))
-        ent = (doc, doc[0].get_displaylist())
-        _dl_cache[pdf_id] = ent
+        path = get_pdf_path(pdf_id)
+        filtered = False
+        if nobg:
+            try:
+                path = nobg_pdf_path(pdf_id)
+            except NoLayersError:
+                filtered = True  # no layers: whiten raster after render
+        doc = fitz.open(str(path))
+        ent = (doc, doc[0].get_displaylist(), filtered)
+        _dl_cache[key] = ent
         while len(_dl_cache) > _DL_MAX:
-            _, (old_doc, _dl) = _dl_cache.popitem(last=False)
+            _, (old_doc, _dl, _f) = _dl_cache.popitem(last=False)
             old_doc.close()
     else:
-        _dl_cache.move_to_end(pdf_id)
-    return ent[1]
+        _dl_cache.move_to_end(key)
+    return ent[1], ent[2]
 
 
-def render_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float, pad: float) -> bytes:
+def whiten_grey(pm):
+    """Return the pixmap as an RGB numpy array with the light unsaturated pixels
+    (architectural grey underlay) turned white."""
+    import numpy as np
+    arr = np.frombuffer(pm.samples, dtype=np.uint8).reshape(pm.height, pm.width, pm.n).copy()
+    rgb = arr[:, :, :3]
+    mx = rgb.max(axis=2); mn = rgb.min(axis=2)
+    arr[(mx - mn < 40) & (mn > 90) & (mx < 250)] = 255
+    return arr
+
+
+def render_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float, pad: float, nobg: bool = False) -> bytes:
     """PNG of the rect [x,y,w,h] (pt, padded by `pad` pt) rendered at `z` px per pt."""
     z = max(1.0, min(48.0, z))
     rect = fitz.Rect(x - pad, y - pad, x + w + pad, y + h + pad)
     if rect.width * z * rect.height * z > 6_000_000:
         raise ValueError("clip too large")
     with _dl_lock:
-        dl = _display_list(pdf_id)
+        dl, filtered = _display_list(pdf_id, nobg=nobg)
         pm = dl.get_pixmap(matrix=fitz.Matrix(z, z), clip=rect, alpha=False)
+        if filtered:
+            import numpy as np
+            import cv2
+            arr = whiten_grey(pm)
+            ok, png = cv2.imencode(".png", cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2BGR))
+            if ok:
+                return png.tobytes()
         return pm.tobytes("png")

@@ -104,8 +104,9 @@ export function SheetViewer() {
   const maskCache = useRef(new Map<string, Map<number, MaskEntry | 'pending'>>());
   const rafRef = useRef<number | null>(null);
 
+  const variant = hideBackground && nobgAvailable ? 'nobg' : 'base';
   const tileUrl = useCallback((level: number, col: number, row: number) =>
-    `/api/tilefiles/${pdfId}/base/image_files/${level}/${col}_${row}.png`, [pdfId]);
+    `/api/tilefiles/${pdfId}/${variant}/image_files/${level}/${col}_${row}.png`, [pdfId, variant]);
 
   // grayscale (max) dilation, separable
   const dilate = (src: Float32Array, w: number, h: number, r: number) => {
@@ -155,7 +156,7 @@ export function SheetViewer() {
       maskCache.current.get(key)?.set(z, { canvas: sc, pad: PADPX / S, z });
     } else {
       // re-rasterised by the server at z px/pt for this region
-      const url = `/api/pdf/${pdfId}/clip?x=${m.x}&y=${m.y}&w=${m.width}&h=${m.height}&z=${z}&pad=${PAD_PT}`;
+      const url = `/api/pdf/${pdfId}/clip?x=${m.x}&y=${m.y}&w=${m.width}&h=${m.height}&z=${z}&pad=${PAD_PT}&nobg=${variant === 'nobg' ? 1 : 0}`;
       const im = await new Promise<HTMLImageElement | null>((res) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = url; });
       if (!im) { maskCache.current.get(key)?.delete(z); return; }
       sc.width = im.naturalWidth; sc.height = im.naturalHeight; const g = sc.getContext('2d', { willReadFrequently: true }); if (!g) return;
@@ -163,7 +164,7 @@ export function SheetViewer() {
       tint(g, sc.width, sc.height, color, z);
       maskCache.current.get(key)?.set(z, { canvas: sc, pad: PAD_PT, z });
     }
-  }, [tileUrl, pdfId]);
+  }, [tileUrl, pdfId, variant]);
 
   const draw = useCallback(() => {
     const canvas = overlayRef.current, host = hostRef.current, v = viewerRef.current, meta = metaRef.current;
@@ -187,7 +188,7 @@ export function SheetViewer() {
         if (m.page !== 1) continue;
         const a = ptToEl(m.x, m.y), b = ptToEl(m.x + m.width, m.y + m.height);
         if (b.x < -50 || b.y < -50 || a.x > w + 50 || a.y > h + 50) continue;
-        const key = `${m.x.toFixed(2)},${m.y.toFixed(2)},${m.width.toFixed(2)},${m.height.toFixed(2)}:${s.color}`;
+        const key = `${m.x.toFixed(2)},${m.y.toFixed(2)},${m.width.toFixed(2)},${m.height.toFixed(2)}:${s.color}:${variant}`;
         let entries = maskCache.current.get(key);
         if (!entries) { entries = new Map(); maskCache.current.set(key, entries); }
         const e = entries.get(bucket);

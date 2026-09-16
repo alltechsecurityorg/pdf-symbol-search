@@ -339,8 +339,26 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
         return []
     idx = load_index(pdf_id)
 
-    hits, masks, worlds = _hypotheses(idx, T, 0.6)
-    hits, masks, worlds = _dedupe(hits, masks, worlds)
+    # Permissive pass to discover sibling instances. A cluttered box needs a lower bar, but a
+    # block learned from low-scoring hits must still explain at least half the boxed geometry,
+    # or we would learn a generic fragment (a bare square matches everything). If no lower
+    # threshold passes that test, fall back to the honest 0.6 result.
+    Tlen_all = np.hypot(T[:, 2] - T[:, 0], T[:, 3] - T[:, 1])
+    fallback = None
+    for th in (0.6, 0.45, 0.35):
+        hits, masks, worlds = _hypotheses(idx, T, th)
+        hits, masks, worlds = _dedupe(hits, masks, worlds)
+        if fallback is None:
+            fallback = (hits, masks, worlds)
+        if len(hits) >= 3:
+            if th < 0.6:
+                support = np.mean(np.stack(masks), axis=0)
+                if float(Tlen_all[support >= 0.5].sum()) / max(float(Tlen_all.sum()), 1e-9) < 0.5:
+                    hits = []  # fragment; keep looking, else fall back
+                    continue
+            break
+    if len(hits) < 3 and fallback is not None:
+        hits, masks, worlds = fallback
     core, attrs = T, []
     n_clutter = 0
     if len(hits) >= 2:
@@ -361,8 +379,9 @@ def find_instances(pdf_id: str, geom: dict, min_score: float = 0.9, max_extra: f
             for c in comps:
                 need = 0.9 if len(c) < 4 else 0.6
                 near = sum(1 for h in clean_hits if _attr_score(idx, c, (h[1], h[2], h[3], h[4])) >= need)
-                # must hold at (nearly) every clean instance; failing at a third of them = clutter
-                if near >= min(2, len(clean_hits)) and near >= 0.7 * len(clean_hits):
+                # real attributes hold at essentially every clean instance; leader lines and
+                # wire dashes recur at many-but-not-all and must stay clutter
+                if near >= min(2, len(clean_hits)) and near >= 0.85 * len(clean_hits):
                     attrs.append(c)
             n_clutter = int((~keep).sum()) - sum(len(a) for a in attrs)
             logger.info("template: block %d segs, %d attributes (%d segs), %d clutter segs (from %d hits)",

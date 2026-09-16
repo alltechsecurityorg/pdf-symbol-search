@@ -21,16 +21,31 @@ TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
 def crop_symbol(pdf_path: str, page_num: int, x: float, y: float, w: float, h: float) -> dict:
     template_id = f"tpl_{uuid.uuid4().hex[:8]}"
 
-    doc = fitz.open(pdf_path)
+    # Crop from the background-hidden view: the architectural underlay is never part of a
+    # symbol, so keeping it out of the template (and thumbnail) helps rather than hurts.
+    from services.pdf_service import nobg_pdf_path, NoLayersError, whiten_grey
+    from pathlib import Path as _Path
+    pdf_id = _Path(pdf_path).stem
+    filtered = False
+    src_path = pdf_path
+    try:
+        src_path = str(nobg_pdf_path(pdf_id))
+    except (NoLayersError, FileNotFoundError):
+        filtered = True  # no layers: whiten the grey underlay in the raster instead
+
+    doc = fitz.open(src_path)
     page = doc[page_num - 1]
 
     clip_rect = fitz.Rect(x, y, x + w, y + h)
     matrix = fitz.Matrix(SCALE_FACTOR, SCALE_FACTOR)
     pixmap = page.get_pixmap(matrix=matrix, clip=clip_rect)
 
-    img_array = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
-        pixmap.height, pixmap.width, pixmap.n
-    )
+    if filtered:
+        img_array = whiten_grey(pixmap)
+    else:
+        img_array = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+            pixmap.height, pixmap.width, pixmap.n
+        )
 
     if pixmap.n == 4:
         gray = cv2.cvtColor(img_array, cv2.COLOR_RGBA2GRAY)

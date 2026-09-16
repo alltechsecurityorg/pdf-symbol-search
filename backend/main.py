@@ -366,7 +366,7 @@ async def pdf_no_background(pdf_id: str):
 
 
 @app.get("/api/pdf/{pdf_id}/clip")
-async def pdf_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float = 12, pad: float = 0.6):
+async def pdf_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float = 12, pad: float = 0.6, nobg: int = 0):
     """Small region of page 1 rasterised at z px/pt - used to tint matched symbols at any zoom."""
     try:
         get_pdf_path(pdf_id)
@@ -375,7 +375,7 @@ async def pdf_clip(pdf_id: str, x: float, y: float, w: float, h: float, z: float
     if w <= 0 or h <= 0 or w > 600 or h > 600:
         raise HTTPException(status_code=400, detail="bad clip size")
     try:
-        png = await run_in_thread(render_clip, pdf_id, x, y, w, h, z, pad)
+        png = await run_in_thread(render_clip, pdf_id, x, y, w, h, z, pad, bool(nobg))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
