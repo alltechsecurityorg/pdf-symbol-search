@@ -39,7 +39,7 @@ function DropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
   );
 }
 
-interface Pending { key: string; disciplineId: string; filename: string }
+interface Pending { key: string; disciplineId: string; filename: string; percent: number }
 interface ImportState { discipline: Discipline; pdfId: string; filename: string; pages: { page: number; name: string }[] }
 
 function ImportPagesModal({ st, onClose, onImport }: { st: ImportState; onClose: () => void; onImport: (pages: number[], legendPage: number | null) => Promise<void> }) {
@@ -137,9 +137,10 @@ export function TakeoffPage() {
   const upload = async (d: Discipline, files: File[]) => {
     for (const f of files) {
       const key = `${d.id}:${f.name}:${Date.now()}`;
-      setPending((p) => [...p, { key, disciplineId: d.id, filename: f.name }]);
+      setPending((p) => [...p, { key, disciplineId: d.id, filename: f.name, percent: 0 }]);
       try {
-        const r = await uploadPdf(f);
+        const r = await uploadPdf(f, (percent) =>
+          setPending((p) => p.map((x) => (x.key === key ? { ...x, percent } : x))));
         if (r.page_count <= 1) {
           addSheet(d, r);
         } else {
@@ -254,7 +255,10 @@ export function TakeoffPage() {
                 ))}
                 {pending.filter((p) => p.disciplineId === d.id).map((p) => (
                   <div key={p.key} className="w-[300px]">
-                    <div className={`${TILE} rounded-sm bg-[#2b3140] flex items-center justify-center`}><Spinner /></div>
+                    <div className={`${TILE} rounded-sm bg-[#2b3140] flex flex-col items-center justify-center gap-2`}>
+                      <Spinner />
+                      <span className="text-[13px] font-semibold text-[#aab2c4] tabular-nums">{p.percent < 100 ? `Uploading ${p.percent}%` : 'Processing…'}</span>
+                    </div>
                     <div className="flex items-center gap-2 mt-2">
                       <span className="w-3.5 h-3.5 rounded-full border border-[#8a92a6] shrink-0" />
                       <span className="text-[14px] text-white truncate">{p.filename}</span>

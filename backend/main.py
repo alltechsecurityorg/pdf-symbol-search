@@ -442,6 +442,39 @@ _STATE_DIR.mkdir(parents=True, exist_ok=True)
 _KV_KEY = _re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 
 
+_UPLOAD_TMP = _Path(os.environ.get("DATA_DIR", "/tmp/pdf-symbol-search")) / "uploads_tmp"
+_UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
+_UP_ID = _re.compile(r"^[A-Za-z0-9-]{8,64}$")
+
+
+@app.put("/api/upload-chunk/{upload_id}/{index}/{total}")
+async def upload_chunk(upload_id: str, index: int, total: int, request: Request, filename: str = "document.pdf"):
+    """Chunked PDF upload: dodges the tunnel's request-size cap and enables progress.
+    Chunks arrive in order (the client sends them sequentially); the last one assembles."""
+    if not _UP_ID.match(upload_id) or not (0 <= index < total <= 400):
+        raise HTTPException(status_code=400, detail="bad chunk request")
+    body = await request.body()
+    if len(body) > 40_000_000:
+        raise HTTPException(status_code=413, detail="chunk too large")
+    part = _UPLOAD_TMP / f"{upload_id}.part"
+    mode = "wb" if index == 0 else "ab"
+    with open(part, mode) as f:
+        f.write(body)
+    if index + 1 < total:
+        return {"ok": True, "received": index + 1}
+    content = part.read_bytes()
+    part.unlink(missing_ok=True)
+    if not content[:5] == b"%PDF-":
+        raise HTTPException(status_code=400, detail="assembled file is not a PDF")
+    try:
+        result = await run_in_thread(save_pdf, content, filename)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
+    if result["page_count"] == 1:
+        prepare_tiles(result["pdf_id"])
+    return result
+
+
 @app.get("/api/kv/{key}")
 async def kv_get(key: str):
     if not _KV_KEY.match(key):

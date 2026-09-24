@@ -1,20 +1,24 @@
 const API_BASE = '/api';
 
-export async function uploadPdf(file: File) {
-  const formData = new FormData();
-  formData.append('file', file);
+const CHUNK = 24 * 1024 * 1024; // stay well under the tunnel's 100MB request cap
 
-  const res = await fetch(`${API_BASE}/upload-pdf`, {
-    method: 'POST',
-    body: formData,
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Upload failed' }));
-    throw new Error(err.detail || 'Upload failed');
+export async function uploadPdf(file: File, onProgress?: (percent: number) => void) {
+  const total = Math.max(1, Math.ceil(file.size / CHUNK));
+  const uploadId = crypto.randomUUID();
+  let last: Response | null = null;
+  for (let i = 0; i < total; i++) {
+    const blob = file.slice(i * CHUNK, (i + 1) * CHUNK);
+    last = await fetch(`${API_BASE}/upload-chunk/${uploadId}/${i}/${total}?filename=${encodeURIComponent(file.name)}`, {
+      method: 'PUT',
+      body: blob,
+    });
+    if (!last.ok) {
+      const err = await last.json().catch(() => ({ detail: `Upload failed (chunk ${i + 1}/${total})` }));
+      throw new Error((err as { detail?: string }).detail || 'Upload failed');
+    }
+    onProgress?.(Math.round(((i + 1) / total) * 100));
   }
-
-  return res.json();
+  return last!.json();
 }
 
 export function getPdfUrl(pdfId: string) {
