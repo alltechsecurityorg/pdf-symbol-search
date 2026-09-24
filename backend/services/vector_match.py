@@ -70,7 +70,9 @@ def _flatten(items) -> list[tuple[float, float, float, float]]:
 
 
 def index_path(pdf_id: str) -> Path:
-    return VEC_DIR / f"{pdf_id}.npz"
+    # v2: coordinates are in the page's DISPLAY space (rotation applied), matching the
+    # viewer, tiles and clip renders. v1 files are simply orphaned and rebuilt.
+    return VEC_DIR / f"{pdf_id}.v2.npz"
 
 
 def build_index(pdf_id: str) -> None:
@@ -88,11 +90,27 @@ def build_index(pdf_id: str) -> None:
     ln = np.hypot(arr[:, 2] - arr[:, 0], arr[:, 3] - arr[:, 1])
     arr = arr[(ln >= MIN_SEG_LEN) & (ln <= MAX_SEG_LEN)]
     words = [[w[0], w[1], w[2], w[3], w[4]] for w in page.get_text("words")]
+    if page.rotation:
+        # raw path/text coordinates are in the unrotated frame; everything else in the app
+        # (tiles, crops, clips, the viewer) works in the rotated display frame
+        m = page.rotation_matrix
+        a, b_, c, d_, e, f = m.a, m.b, m.c, m.d, m.e, m.f
+        if len(arr):
+            x0, y0, x1, y1 = arr[:, 0].copy(), arr[:, 1].copy(), arr[:, 2].copy(), arr[:, 3].copy()
+            arr[:, 0] = a * x0 + c * y0 + e
+            arr[:, 1] = b_ * x0 + d_ * y0 + f
+            arr[:, 2] = a * x1 + c * y1 + e
+            arr[:, 3] = b_ * x1 + d_ * y1 + f
+        def rot_rect(w):
+            p0 = fitz.Point(w[0], w[1]) * m
+            p1 = fitz.Point(w[2], w[3]) * m
+            return [min(p0.x, p1.x), min(p0.y, p1.y), max(p0.x, p1.x), max(p0.y, p1.y), w[4]]
+        words = [rot_rect(w) for w in words]
     doc.close()
     tmp = path.with_suffix(".tmp.npz")
     np.savez(tmp, seg=arr)
     tmp.rename(path)
-    (VEC_DIR / f"{pdf_id}.words.json").write_text(json.dumps(words))
+    (VEC_DIR / f"{pdf_id}.v2.words.json").write_text(json.dumps(words))
     logger.info("vector index %s: %d segments, %d words in %.1fs", pdf_id, len(arr), len(words), time.time() - t0)
 
 
@@ -103,7 +121,7 @@ def load_index(pdf_id: str) -> dict:
         return ent
     build_index(pdf_id)
     seg = np.load(index_path(pdf_id))["seg"]
-    wp = VEC_DIR / f"{pdf_id}.words.json"
+    wp = VEC_DIR / f"{pdf_id}.v2.words.json"
     words = json.loads(wp.read_text()) if wp.exists() else []
     mid = (seg[:, :2] + seg[:, 2:]) / 2
     ln = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
