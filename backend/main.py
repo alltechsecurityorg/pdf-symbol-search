@@ -189,9 +189,12 @@ async def run_search_stream(request: SearchRequest):
                 template = rescale_template(template_raw, SCALE_FACTOR, page_scale)
                 template_vector = load_vector_data(symbol.template_id)
                 tpl_inner_text = template_vector.get("inner_text") if template_vector else None
+                # Low candidate threshold: cast a wide net for recall, since every uncertain
+                # candidate is adjudicated by the AI verifier below.
+                cand_conf = min(request.confidence_threshold, 0.45)
                 pixel_matches = await run_in_thread(
                     match_symbol_on_page,
-                    page_binary, page_gray, template, request.confidence_threshold,
+                    page_binary, page_gray, template, cand_conf,
                     None, None,  # scales, rotations (use defaults)
                     str(pdf_path), page_num, page_scale,
                     template_vector, page_dwg,
@@ -203,11 +206,18 @@ async def run_search_stream(request: SearchRequest):
                     pdf_coords = pixel_to_pdf_coords(match, page_scale)
                     pdf_coords["page"] = page_num
                     pdf_matches.append(pdf_coords)
+                raster_all = list(pdf_matches)  # every raster candidate, before merge trims them
 
                 # Geometry matching on the sheet's own vectors (exact for CAD blocks); raster fills gaps.
                 geom = load_geometry(symbol.template_id)
                 review = []
-                if geom and page_num == 1:
+                # Outlined-glyph symbols (letters/fills converted to vector outlines) are hundreds
+                # of sub-1pt segments that never match exactly - geometry is slow and useless there,
+                # so skip straight to the raster + AI path.
+                seg = (geom or {}).get("seg") or []
+                tiny = sum(1 for a, b, c, d in seg if (abs(c - a) + abs(d - b)) < 1.4)
+                outlined = len(seg) >= 30 and tiny > 0.7 * len(seg)
+                if geom and page_num == 1 and not outlined:
                     try:
                         vec, review = await run_in_thread(find_instances_full, request.pdf_id, geom)
                     except Exception:  # noqa: BLE001
@@ -265,6 +275,22 @@ async def run_search_stream(request: SearchRequest):
                             pdf_matches.append(m)
                     except Exception:  # noqa: BLE001
                         logging.getLogger(__name__).exception("text-anchor failed")
+                # Raster candidates the deterministic layers did not confirm become review
+                # candidates too: for outlined-glyph symbols (letters converted to vector
+                # outlines) geometry fails but image matching finds them, and the AI verifier
+                # decides which are real. Auto-accept only the very confident raster hits.
+                confirmed_now = [m for m in pdf_matches if not m.get("review")]
+                def _covered(m, pool):
+                    cx, cy = m["x"] + m["width"] / 2, m["y"] + m["height"] / 2
+                    return any(o["x"] - 1 <= cx <= o["x"] + o["width"] + 1 and o["y"] - 1 <= cy <= o["y"] + o["height"] + 1 for o in pool)
+                for m in raster_all:
+                    if _covered(m, confirmed_now) or _covered(m, review):
+                        continue
+                    m["review"] = True
+                    review.append(m)
+                # verify the most promising candidates first (cap keeps cost bounded)
+                review.sort(key=lambda m: -m.get("confidence", 0))
+
                 # AI adjudication: instead of surfacing dashed uncertainty, crop each review
                 # candidate and let the vision model judge it against the reference in one call.
                 # Confirmed candidates join the count; rejected ones vanish. Any failure falls
@@ -274,14 +300,13 @@ async def run_search_stream(request: SearchRequest):
                         b = geom["box"]
                         ref_png = await run_in_thread(render_clip, geom["pdf_id"], b[0], b[1], b[2], b[3],
                                                       max(4.0, min(24.0, 180.0 / max(b[2], b[3], 1e-6))), 2.0, True)
-                        verdicts = await run_in_thread(verify_candidates, request.pdf_id, ref_png, review[:24])
-                        kept_r = []
-                        for m, ok in zip(review[:24], verdicts):
+                        verdicts = await run_in_thread(verify_candidates, request.pdf_id, ref_png, review[:30])
+                        for m, ok in zip(review[:30], verdicts):
                             if ok:
                                 m.pop("review", None)
                                 m["confidence"] = max(m.get("confidence", 0.8), 0.9)
                                 pdf_matches.append(m)
-                        review = review[24:] + kept_r  # anything beyond the cap stays dashed
+                        review = review[30:]  # beyond the cap stays dashed for the user to judge
                     except Exception:  # noqa: BLE001
                         logging.getLogger(__name__).exception("ai verify failed; keeping review band")
                 pdf_matches = pdf_matches + review
