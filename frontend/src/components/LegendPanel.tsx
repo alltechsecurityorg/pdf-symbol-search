@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useAppStore, type SymbolTemplate } from '../store/appStore';
+import { useAppStore, type SymbolTemplate, type SymbolMatch } from '../store/appStore';
 import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { v4 as uuidv4 } from 'uuid';
@@ -56,22 +56,20 @@ export function LegendPanel() {
     seededFor.current = openPdfId;
     const seedOf = (li: (typeof ctx.legendItems)[number]) => ({
       id: uuidv4(), name: li.name, color: li.color, thumbnail: li.thumbnail, templateId: li.templateId,
-      cropRegion: li.cropRegion, visible: true, matches: [], searched: isLegendSheet, selectedForSearch: false, queued: false, variants: li.variants ?? [],
+      cropRegion: li.cropRegion, visible: true, matches: [], searched: false, selectedForSearch: false, queued: false, variants: li.variants ?? [],
     });
     let cancelled = false;
     (async () => {
-      if (!isLegendSheet) {
-        const raw = await kvGet(`sheet-${openPdfId}`);
-        if (cancelled) return;
-        if (raw) {
-          try {
-            const saved = JSON.parse(raw) as SymbolTemplate[];
-            const have = new Set(saved.map((x) => x.templateId));
-            const extra = ctx.legendItems.filter((li) => !have.has(li.templateId)).map(seedOf);
-            setSymbols([...saved.map((x) => ({ ...x, queued: false })), ...extra]);
-            return;
-          } catch { /* fall through to seeding */ }
-        }
+      const raw = await kvGet(`sheet-${openPdfId}`);
+      if (cancelled) return;
+      if (raw) {
+        try {
+          const saved = JSON.parse(raw) as SymbolTemplate[];
+          const have = new Set(saved.map((x) => x.templateId));
+          const extra = ctx.legendItems.filter((li) => !have.has(li.templateId)).map(seedOf);
+          setSymbols([...saved.map((x) => ({ ...x, queued: false })), ...extra]);
+          return;
+        } catch { /* fall through to seeding */ }
       }
       if (ctx.legendItems.length > 0 || isLegendSheet) setSymbols(ctx.legendItems.map(seedOf));
     })();
@@ -81,11 +79,22 @@ export function LegendPanel() {
 
   // Autosave the working set (items, variants, counts, confirmations) per sheet.
   useEffect(() => {
-    if (!openPdfId || isLegendSheet || seededFor.current !== openPdfId) return;
+    if (!openPdfId || seededFor.current !== openPdfId) return;
     if (pdfLoading) return;
     kvPutDebounced(`sheet-${openPdfId}`, JSON.stringify(symbols), 800);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbols, openPdfId, isLegendSheet]);
+  }, [symbols, openPdfId]);
+
+  // The legend block repeats on every page of this set, so matches inside any legend row's
+  // boxed region are legend samples, not counted devices - on every sheet of the discipline.
+  const stripLegendSamples = (matches: SymbolMatch[]): SymbolMatch[] => {
+    if (!ctx || ctx.legendItems.length === 0) return matches;
+    const zones = ctx.legendItems.flatMap((li) => [li.cropRegion, ...(li.variants ?? []).map((v) => v.cropRegion)]);
+    return matches.filter((m) => {
+      const cx = m.x + m.width / 2, cy = m.y + m.height / 2;
+      return !zones.some((z) => cx >= z.x - 2 && cx <= z.x + z.width + 2 && cy >= z.y - 2 && cy <= z.y + z.height + 2);
+    });
+  };
 
   // edits made while on the legend sheet write through to the discipline's legend
   const syncLegend = (templateId: string, patch: { name?: string; color?: string }) => {
@@ -108,7 +117,7 @@ export function LegendPanel() {
         if (old) removeSymbol(old.id);
         const used = useAppStore.getState().symbols.map((x) => x.color);
         const color = PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[used.length % PRESET_COLORS.length];
-        addCountedSymbol({ name: it.name, color, thumbnail: it.thumbnail, templateId: it.template_id, cropRegion: it.crop_region, matches: it.matches });
+        addCountedSymbol({ name: it.name, color, thumbnail: it.thumbnail, templateId: it.template_id, cropRegion: it.crop_region, matches: stripLegendSamples(it.matches) });
       },
       onDone: (summary, cost, n) => { log(`Done - ${n} symbol types (cost $${cost}). ${summary}`); setAiBusy(false); },
       onError: (e) => { log(`AI count failed: ${e.message}`); setAiBusy(false); },
@@ -148,7 +157,7 @@ export function LegendPanel() {
         onSymbolComplete: (data) => {
           completed++;
           const symId = bySymbol[data.template_id];
-          if (symId && data.matches.length > 0) appendMatchesById(symId, data.matches);
+          if (symId && data.matches.length > 0) appendMatchesById(symId, stripLegendSamples(data.matches));
           setSearchProgressPercent(Math.round((completed / totalWork) * 100));
         },
         onDone: () => {
@@ -171,7 +180,6 @@ export function LegendPanel() {
 
   // Auto-count: anything new (or reset via re-count) gets counted as soon as the engine is free.
   useEffect(() => {
-    if (isLegendSheet) return; // the legend sheet is for defining symbols, not counting them
     if (isSearching || pdfLoading || !sitePdf) return;
     const pending = symbols.filter((s) => s.queued && !s.searched);
     if (pending.length > 0) runCount(pending);
@@ -262,11 +270,11 @@ export function LegendPanel() {
 
       {isLegendSheet && symbols.length > 0 && (
         <div className="mx-4 mb-2 px-3 py-2 rounded bg-[#262b3a] border border-[#3a4156]">
-          <p className="text-[12px] text-[#aab2c4] leading-snug">This is the legend — counting happens on drawings. Open any sheet in this discipline and these symbols load there with the <span className="text-white font-semibold">Count</span> and <span className="text-sky-400 font-semibold">✨ AI count</span> buttons.</p>
+          <p className="text-[12px] text-[#aab2c4] leading-snug">This sheet is the legend, and you can count on it too — the legend's own sample symbols are excluded from counts automatically (on every sheet in this discipline).</p>
         </div>
       )}
 
-      <div className="px-4 pb-2" hidden={isLegendSheet}>
+      <div className="px-4 pb-2">
         {!aiBusy ? (
           (() => {
             const checked = symbols.filter((s) => s.selectedForSearch).length;

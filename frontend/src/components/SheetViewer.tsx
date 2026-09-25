@@ -432,7 +432,8 @@ export function SheetViewer() {
           for (const e of entries) {
             const name = e.name || nextName();
             const color = nextColor();
-            addCountedSymbol({ name, color, thumbnail: e.thumbnail_base64, templateId: e.template_id, cropRegion: e.crop, matches: [] });
+            // countable immediately: the legend often lives on a drawing sheet
+            addSymbol({ name, color, thumbnail: e.thumbnail_base64, templateId: e.template_id, cropRegion: e.crop });
             addLegendItem(legendCtx.projectId, legendCtx.takeoffId, legendCtx.disciplineId,
               { name, color, thumbnail: e.thumbnail_base64, templateId: e.template_id, cropRegion: e.crop });
           }
