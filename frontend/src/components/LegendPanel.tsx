@@ -136,7 +136,21 @@ export function LegendPanel() {
         const st = useAppStore.getState();
         const old = st.symbols.find((x) => x.name.trim().toLowerCase() === it.name.trim().toLowerCase());
         if (old) {
-          appendMatchesById(old.id, stripLegendSamples(it.matches)); // dedupes internally
+          const clean = stripLegendSamples(it.matches);
+          // did the sweep genuinely find instances we did not have?
+          const fresh = clean.filter((m) => !old.matches.some((o) =>
+            o.x <= m.x + m.width / 2 && m.x + m.width / 2 <= o.x + o.width &&
+            o.y <= m.y + m.height / 2 && m.y + m.height / 2 <= o.y + o.height));
+          appendMatchesById(old.id, clean); // dedupes internally
+          // a productive AI box becomes a permanent variant, so future sheets count it by geometry
+          const known = old.templateId === it.template_id || (old.variants ?? []).some((v) => v.templateId === it.template_id);
+          if (fresh.length > 0 && !known) {
+            const v = { templateId: it.template_id, thumbnail: it.thumbnail, cropRegion: it.crop_region };
+            useAppStore.getState().addVariant(old.id, v);
+            if (ctx && ctx.legendItems.some((li) => li.templateId === old.templateId))
+              addLegendVariant(ctx.projectId, ctx.takeoffId, ctx.disciplineId, old.templateId, v);
+            log(`Learned a new drawing style for "${old.name}" (+${fresh.length})`);
+          }
         } else {
           const used = st.symbols.map((x) => x.color);
           const color = PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[used.length % PRESET_COLORS.length];

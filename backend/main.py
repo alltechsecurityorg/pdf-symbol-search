@@ -35,6 +35,9 @@ from services.export_service import export_csv
 from services.tile_service import prepare as prepare_tiles, status as tiles_status, TILES_DIR
 from services.vector_match import load_geometry, find_instances_full, merge_matches
 from services.ocr_service import read_code
+from services.ai_service import _snap_box
+from services.vector_match import load_index
+import re
 from services.ai_service import run_ai_count
 from services.legend_service import extract_legend
 from starlette.concurrency import iterate_in_threadpool
@@ -236,6 +239,32 @@ async def run_search_stream(request: SearchRequest):
                             else:
                                 kept.append(m)
                         pdf_matches = kept
+                # Text-anchored engine: an item coded like 'ELECTRIC STRIKE (ES)' also matches
+                # every standalone 'ES' word on the sheet, snapping the symbol around the label.
+                # Catches instances whose geometry differs from the reference (bolt vs letters).
+                code = None
+                mcode = re.search(r"\(([A-Z0-9]{2,4})\)", symbol.symbol_name or "")
+                if mcode:
+                    code = mcode.group(1)
+                elif geom and len(geom.get("words") or []) == 1 and 2 <= len(str(geom["words"][0])) <= 4:
+                    code = str(geom["words"][0]).upper()
+                if code and page_num == 1:
+                    try:
+                        idx = load_index(request.pdf_id)
+                        existing = pdf_matches + review
+                        for wd in idx["words"]:
+                            if str(wd[4]).strip().upper() != code:
+                                continue
+                            bx, by, bw, bh = wd[0] - 4, wd[1] - 3, (wd[2] - wd[0]) + 8, (wd[3] - wd[1]) + 6
+                            sx, sy, sw, sh, _snapped = await run_in_thread(_snap_box, request.pdf_id, bx, by, bw, bh)
+                            cx, cy = sx + sw / 2, sy + sh / 2
+                            if any(o["x"] - 1 <= cx <= o["x"] + o["width"] + 1 and o["y"] - 1 <= cy <= o["y"] + o["height"] + 1 for o in existing):
+                                continue
+                            m = {"x": sx, "y": sy, "width": sw, "height": sh, "confidence": 0.85, "page": page_num}
+                            existing.append(m)
+                            pdf_matches.append(m)
+                    except Exception:  # noqa: BLE001
+                        logging.getLogger(__name__).exception("text-anchor failed")
                 pdf_matches = pdf_matches + review
 
                 yield {
