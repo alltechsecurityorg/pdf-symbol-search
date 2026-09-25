@@ -89,6 +89,8 @@ interface AppState {
   markSearchedById: (symbolId: string) => void;
   variantTarget: string | null;
   setVariantTarget: (id: string | null) => void;
+  legendBuild: boolean;
+  setLegendBuild: (v: boolean) => void;
   removeSymbol: (id: string) => void;
   updateSymbolName: (id: string, name: string) => void;
   updateSymbolColor: (id: string, color: string) => void;
@@ -139,6 +141,7 @@ const initialState = {
   undoStack: [] as UndoAction[],
   focusMatch: null as AppState['focusMatch'],
   variantTarget: null as string | null,
+  legendBuild: false,
   pdfLoading: false,
   pdfLoadingMessage: '',
   hideBackground: false,
@@ -190,6 +193,7 @@ export const useAppStore = create<AppState>((set) => ({
   markSearchedById: (symbolId) =>
     set((state) => ({ symbols: state.symbols.map((s) => (s.id === symbolId ? { ...s, searched: true, queued: false } : s)) })),
   setVariantTarget: (id) => set({ variantTarget: id }),
+  setLegendBuild: (v) => set({ legendBuild: v }),
 
   // AI-counted items arrive with their matches already found - never re-queued for auto-count
   addCountedSymbol: (symbol) =>

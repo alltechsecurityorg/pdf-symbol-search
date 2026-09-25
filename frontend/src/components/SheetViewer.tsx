@@ -423,8 +423,8 @@ export function SheetViewer() {
           setIsCropMode(false);
           return;
         }
-        if (legendCtx) {
-          // On the legend sheet a box may cover a whole section: the server splits it into
+        if (legendCtx && useAppStore.getState().legendBuild) {
+          // Legend-build mode armed: a box may cover a whole section - the server splits it into
           // one entry per legend row (glyph + name where the sheet has real text).
           const entries = await extractLegend(pdfId, x, y, width, height);
           if (entries.length === 0) { alert('No legend symbols recognised in that box.'); return; }

@@ -46,6 +46,8 @@ export function LegendPanel() {
   const updateLegendItem = useProjectStore((s) => s.updateLegendItem);
   const removeLegendItem = useProjectStore((s) => s.removeLegendItem);
   const setSymbols = useAppStore((s) => s.setSymbols);
+  const legendBuild = useAppStore((s) => s.legendBuild);
+  const setLegendBuild = useAppStore((s) => s.setLegendBuild);
 
   // Opening a sheet restores its saved takeoff (counts included) from the server; without one
   // it seeds from the discipline's legend. Legend items added since the save are appended.
@@ -54,6 +56,7 @@ export function LegendPanel() {
   useEffect(() => {
     if (!openPdfId || !ctx || seededFor.current === openPdfId) return;
     seededFor.current = openPdfId;
+    setLegendBuild(isLegendSheet && ctx.legendItems.length === 0); // empty legend: first boxes define it
     const seedOf = (li: (typeof ctx.legendItems)[number]) => ({
       id: uuidv4(), name: li.name, color: li.color, thumbnail: li.thumbnail, templateId: li.templateId,
       cropRegion: li.cropRegion, visible: true, matches: [], searched: false, selectedForSearch: false, queued: false, variants: li.variants ?? [],
@@ -247,10 +250,18 @@ export function LegendPanel() {
           </div>
         ) : (
           <button
-            onClick={() => setIsCropMode(!isCropMode)}
+            onClick={() => {
+              if (isLegendSheet) {
+                const next = !legendBuild;
+                setLegendBuild(next);
+                if (next) setIsCropMode(true);
+              } else {
+                setIsCropMode(!isCropMode);
+              }
+            }}
             disabled={!activePdf}
             className={`w-full text-left rounded-md bg-[#262b3a] border-b-4 p-5 flex items-start gap-4 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-default ${
-              isCropMode ? 'border-orange-500 ring-1 ring-orange-500/70' : 'border-orange-500 hover:bg-[#2a3040]'
+              isLegendSheet && legendBuild ? 'border-sky-500 ring-1 ring-sky-500/70' : isCropMode ? 'border-orange-500 ring-1 ring-orange-500/70' : 'border-orange-500 hover:bg-[#2a3040]'
             }`}
           >
             <svg className="w-11 h-11 shrink-0" viewBox="0 0 44 44">
@@ -260,8 +271,12 @@ export function LegendPanel() {
               <path d="M31 24v14M24 31h14" stroke="#fff" strokeWidth="1.6"/>
             </svg>
             <div>
-              <div className="text-[15px] font-bold text-white">{isLegendSheet ? 'Build the legend' : 'Auto-count items'}</div>
-              <div className="text-[13px] text-[#d5dbe6] mt-1 leading-snug">{isLegendSheet ? 'Drag a box over a whole legend section — each row becomes its own legend symbol, used across every drawing in this discipline.' : 'Drag a box over an item to count it across all your drawings.'}</div>
+              <div className="text-[15px] font-bold text-white">{isLegendSheet ? (legendBuild ? 'Building the legend — ON' : 'Build the legend') : 'Auto-count items'}</div>
+              <div className="text-[13px] text-[#d5dbe6] mt-1 leading-snug">{isLegendSheet
+                ? (legendBuild
+                  ? 'Drag a box over a legend section — each row becomes a legend symbol. Click here when done to go back to normal counting.'
+                  : 'Boxes count items like on any drawing. Click here to add more symbols to the legend instead.')
+                : 'Drag a box over an item to count it across all your drawings.'}</div>
               <div className="text-[12px] text-[#8a92a6] mt-1.5">{isCropMode ? 'Smart select is on — hold Space and drag to move around.' : 'Smart select is off — click to turn it on.'}</div>
             </div>
           </button>
