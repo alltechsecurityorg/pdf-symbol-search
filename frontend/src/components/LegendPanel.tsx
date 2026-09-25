@@ -20,6 +20,7 @@ export function LegendPanel() {
     clearMatchesById,
     markSearchedById,
     setVariantTarget,
+    mergeSymbols,
   } = useAppStore();
 
   const activePdf = sitePdf;
@@ -44,6 +45,7 @@ export function LegendPanel() {
   const legendPdfId = ctx?.legendPdfId ?? null;
   const isLegendSheet = !!ctx && !!openPdfId && ctx.legendPdfId === openPdfId;
   const updateLegendItem = useProjectStore((s) => s.updateLegendItem);
+  const addLegendVariant = useProjectStore((s) => s.addLegendVariant);
   const removeLegendItem = useProjectStore((s) => s.removeLegendItem);
   const setSymbols = useAppStore((s) => s.setSymbols);
   const legendBuild = useAppStore((s) => s.legendBuild);
@@ -97,6 +99,22 @@ export function LegendPanel() {
       const cx = m.x + m.width / 2, cy = m.y + m.height / 2;
       return !zones.some((z) => cx >= z.x - 2 && cx <= z.x + z.width + 2 && cy >= z.y - 2 && cy <= z.y + z.height + 2);
     });
+  };
+
+  // Grouping: the dragged symbol becomes a variant set of the drop target; the discipline
+  // legend mirrors the merge so it holds on every sheet.
+  const handleMerge = (sourceId: string, targetId: string) => {
+    const st = useAppStore.getState();
+    const src = st.symbols.find((x) => x.id === sourceId);
+    const tgt = st.symbols.find((x) => x.id === targetId);
+    if (!src || !tgt || !ctx) { mergeSymbols(sourceId, targetId); return; }
+    const inLegend = (tid: string) => ctx.legendItems.some((li) => li.templateId === tid);
+    if (inLegend(tgt.templateId)) {
+      for (const v of [{ templateId: src.templateId, thumbnail: src.thumbnail, cropRegion: src.cropRegion }, ...(src.variants ?? [])])
+        addLegendVariant(ctx.projectId, ctx.takeoffId, ctx.disciplineId, tgt.templateId, v);
+    }
+    if (inLegend(src.templateId)) removeLegendItem(ctx.projectId, ctx.takeoffId, ctx.disciplineId, src.templateId);
+    mergeSymbols(sourceId, targetId);
   };
 
   // edits made while on the legend sheet write through to the discipline's legend
@@ -394,6 +412,7 @@ export function LegendPanel() {
             onMarkUnsearched={() => markUnsearched(symbol.id)}
             onCount={() => armSymbol(symbol.id)}
             onAddVariant={() => { setVariantTarget(symbol.id); setIsCropMode(true); }}
+            onMergeFrom={(sourceId) => handleMerge(sourceId, symbol.id)}
             isManualMode={manualModeSymbolId === symbol.id}
           />
         ))}

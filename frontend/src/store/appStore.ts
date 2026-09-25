@@ -91,6 +91,7 @@ interface AppState {
   setVariantTarget: (id: string | null) => void;
   legendBuild: boolean;
   setLegendBuild: (v: boolean) => void;
+  mergeSymbols: (sourceId: string, targetId: string) => void;
   removeSymbol: (id: string) => void;
   updateSymbolName: (id: string, name: string) => void;
   updateSymbolColor: (id: string, color: string) => void;
@@ -194,6 +195,28 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({ symbols: state.symbols.map((s) => (s.id === symbolId ? { ...s, searched: true, queued: false } : s)) })),
   setVariantTarget: (id) => set({ variantTarget: id }),
   setLegendBuild: (v) => set({ legendBuild: v }),
+
+  // Group two items: the source becomes a variant set of the target, matches merge deduped
+  mergeSymbols: (sourceId, targetId) =>
+    set((state) => {
+      const src = state.symbols.find((s) => s.id === sourceId);
+      const tgt = state.symbols.find((s) => s.id === targetId);
+      if (!src || !tgt || sourceId === targetId) return state;
+      const variants = [
+        ...(tgt.variants ?? []),
+        { templateId: src.templateId, thumbnail: src.thumbnail, cropRegion: src.cropRegion },
+        ...(src.variants ?? []),
+      ];
+      const fresh = src.matches.filter((m) => !tgt.matches.some((o) =>
+        o.x <= m.x + m.width / 2 && m.x + m.width / 2 <= o.x + o.width &&
+        o.y <= m.y + m.height / 2 && m.y + m.height / 2 <= o.y + o.height));
+      return {
+        symbols: state.symbols
+          .filter((s) => s.id !== sourceId)
+          .map((s) => (s.id === targetId ? { ...s, variants, matches: [...s.matches, ...fresh] } : s)),
+        manualModeSymbolId: state.manualModeSymbolId === sourceId ? null : state.manualModeSymbolId,
+      };
+    }),
 
   // AI-counted items arrive with their matches already found - never re-queued for auto-count
   addCountedSymbol: (symbol) =>

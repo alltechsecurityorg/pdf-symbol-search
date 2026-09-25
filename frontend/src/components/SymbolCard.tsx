@@ -13,6 +13,7 @@ interface SymbolCardProps {
   onMarkUnsearched: () => void;
   onCount: () => void;
   onAddVariant: () => void;
+  onMergeFrom: (sourceSymbolId: string) => void;
   isManualMode: boolean;
 }
 
@@ -25,12 +26,13 @@ const ico = 'w-4 h-4';
 const act = 'w-7 h-7 rounded flex items-center justify-center text-[#8a92a6] hover:text-white hover:bg-[#2c3245] cursor-pointer';
 
 export function SymbolCard({
-  symbol, onToggleVisibility, onDelete, onUpdateName, onUpdateColor, onCycleMatch, onToggleSelectedForSearch, onToggleManualMode, onMarkUnsearched, onCount, onAddVariant, isManualMode,
+  symbol, onToggleVisibility, onDelete, onUpdateName, onUpdateColor, onCycleMatch, onToggleSelectedForSearch, onToggleManualMode, onMarkUnsearched, onCount, onAddVariant, onMergeFrom, isManualMode,
 }: SymbolCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(symbol.name);
   const [showColors, setShowColors] = useState(false);
   const [open, setOpen] = useState(true);
+  const [dropHover, setDropHover] = useState(false);
   const [idx, setIdx] = useState(0);
 
   const count = symbol.matches.filter((m) => !m.review).length;
@@ -41,7 +43,19 @@ export function SymbolCard({
   const cycle = () => { if (!count) return; const n = (idx + 1) % count; setIdx(n); onCycleMatch(n); };
 
   return (
-    <div className={`relative group bg-[#1f2433] border-b border-[#2c3245] ${isManualMode ? 'ring-1 ring-inset ring-yellow-500/70' : ''}`}>
+    <div
+      draggable
+      onDragStart={(e) => { e.dataTransfer.setData('text/pss-symbol', symbol.id); e.dataTransfer.effectAllowed = 'move'; }}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('text/pss-symbol')) { e.preventDefault(); setDropHover(true); } }}
+      onDragLeave={() => setDropHover(false)}
+      onDrop={(e) => {
+        e.preventDefault(); setDropHover(false);
+        const src = e.dataTransfer.getData('text/pss-symbol');
+        if (src && src !== symbol.id) onMergeFrom(src);
+      }}
+      title="Drag onto another symbol to group them (the drop target keeps its name; the dragged one becomes its variant)"
+      className={`relative group bg-[#1f2433] border-b border-[#2c3245] ${isManualMode ? 'ring-1 ring-inset ring-yellow-500/70' : ''} ${dropHover ? 'ring-2 ring-inset ring-sky-400 bg-[#232b3e]' : ''}`}
+    >
       {/* colour bar — click to change */}
       <button onClick={() => setShowColors(!showColors)} title="Change colour" className="absolute left-0 top-0 bottom-0 w-[5px] cursor-pointer" style={{ background: symbol.color }} />
       {showColors && (
