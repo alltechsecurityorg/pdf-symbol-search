@@ -21,6 +21,7 @@ export function LegendPanel() {
     markSearchedById,
     setVariantTarget,
     mergeSymbols,
+    setAllSelected,
   } = useAppStore();
 
   const activePdf = sitePdf;
@@ -374,6 +375,28 @@ export function LegendPanel() {
             </div>
           )}
           <p className="text-xs text-[#aab2c4] truncate">{searchProgress}</p>
+        </div>
+      )}
+
+      {symbols.length > 0 && !pdfLoading && (
+        <div className="flex items-center justify-between px-4 pb-1.5 text-[12px]">
+          {(() => {
+            const allSelected = symbols.every((s) => s.selectedForSearch);
+            return (
+              <button onClick={() => setAllSelected(!allSelected)} className="text-[#aab2c4] hover:text-white cursor-pointer">
+                {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
+            );
+          })()}
+          <button
+            onClick={() => {
+              if (!confirm(`Remove all ${symbols.length} symbols from this sheet?\n\nThe discipline legend is NOT deleted - its symbols reload (uncounted) next time a sheet opens.`)) return;
+              setSymbols([]);
+            }}
+            className="text-red-400/80 hover:text-red-300 cursor-pointer"
+          >
+            Remove all
+          </button>
         </div>
       )}
 

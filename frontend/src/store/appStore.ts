@@ -92,6 +92,7 @@ interface AppState {
   legendBuild: boolean;
   setLegendBuild: (v: boolean) => void;
   mergeSymbols: (sourceId: string, targetId: string) => void;
+  setAllSelected: (v: boolean) => void;
   removeSymbol: (id: string) => void;
   updateSymbolName: (id: string, name: string) => void;
   updateSymbolColor: (id: string, color: string) => void;
@@ -195,6 +196,7 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({ symbols: state.symbols.map((s) => (s.id === symbolId ? { ...s, searched: true, queued: false } : s)) })),
   setVariantTarget: (id) => set({ variantTarget: id }),
   setLegendBuild: (v) => set({ legendBuild: v }),
+  setAllSelected: (v) => set((state) => ({ symbols: state.symbols.map((s) => ({ ...s, selectedForSearch: v })) })),
 
   // Group two items: the source becomes a variant set of the target, matches merge deduped
   mergeSymbols: (sourceId, targetId) =>
