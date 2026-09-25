@@ -35,7 +35,7 @@ from services.export_service import export_csv
 from services.tile_service import prepare as prepare_tiles, status as tiles_status, TILES_DIR
 from services.vector_match import load_geometry, find_instances_full, merge_matches
 from services.ocr_service import read_code
-from services.ai_service import _snap_box
+from services.ai_service import _snap_box, verify_candidates
 from services.vector_match import load_index
 import re
 from services.ai_service import run_ai_count
@@ -265,6 +265,25 @@ async def run_search_stream(request: SearchRequest):
                             pdf_matches.append(m)
                     except Exception:  # noqa: BLE001
                         logging.getLogger(__name__).exception("text-anchor failed")
+                # AI adjudication: instead of surfacing dashed uncertainty, crop each review
+                # candidate and let the vision model judge it against the reference in one call.
+                # Confirmed candidates join the count; rejected ones vanish. Any failure falls
+                # back to the dashed review band so nothing is silently lost.
+                if review and geom and os.environ.get("AI_VERIFY", "1") == "1":
+                    try:
+                        b = geom["box"]
+                        ref_png = await run_in_thread(render_clip, geom["pdf_id"], b[0], b[1], b[2], b[3],
+                                                      max(4.0, min(24.0, 180.0 / max(b[2], b[3], 1e-6))), 2.0, True)
+                        verdicts = await run_in_thread(verify_candidates, request.pdf_id, ref_png, review[:24])
+                        kept_r = []
+                        for m, ok in zip(review[:24], verdicts):
+                            if ok:
+                                m.pop("review", None)
+                                m["confidence"] = max(m.get("confidence", 0.8), 0.9)
+                                pdf_matches.append(m)
+                        review = review[24:] + kept_r  # anything beyond the cap stays dashed
+                    except Exception:  # noqa: BLE001
+                        logging.getLogger(__name__).exception("ai verify failed; keeping review band")
                 pdf_matches = pdf_matches + review
 
                 yield {

@@ -378,3 +378,40 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
             return
 
     yield {"type": "done", "summary": "Stopped at the step limit.", "cost": round(total_cost, 3), "items": items}
+
+
+VERIFY_SYSTEM = """You verify symbol matches on an electrical/security drawing.
+The first image is the REFERENCE symbol. Each numbered image after it is a CANDIDATE crop.
+A candidate matches if it shows the same device symbol as the reference - any rotation or
+mirroring, letters always read normally, wires/walls crossing it are irrelevant. A different
+device, empty linework, or text alone does not match.
+Reply with ONLY JSON: {"matches": [<candidate numbers that match>]}"""
+
+
+def verify_candidates(pdf_id: str, ref_png: bytes, boxes: list) -> list[bool]:
+    """One vision call: which candidate crops show the reference symbol? Falls back to
+    all-True (keep as uncertain) on any failure so verification can never lose real matches."""
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key or not boxes:
+        raise RuntimeError("no key or no boxes")
+    content = [{"type": "text", "text": "REFERENCE symbol:"},
+               {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(ref_png).decode()}}]
+    for i, b in enumerate(boxes):
+        pad = max(2.0, 0.35 * max(b["width"], b["height"]))
+        png = render_clip(pdf_id, b["x"], b["y"], b["width"], b["height"],
+                          z=max(4.0, min(24.0, 180.0 / max(b["width"], b["height"], 1e-6))), pad=pad, nobg=True)
+        content.append({"type": "text", "text": f"Candidate {i + 1}:"})
+        content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}})
+    r = requests.post(API, timeout=180,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": MODEL, "reasoning": {"effort": "low"}, "max_tokens": 600, "usage": {"include": True},
+              "messages": [{"role": "system", "content": VERIFY_SYSTEM}, {"role": "user", "content": content}]})
+    data = r.json()
+    if "error" in data:
+        raise RuntimeError(str(data["error"])[:200])
+    txt = data["choices"][0]["message"]["content"] or ""
+    m = json.loads(txt[txt.index("{"): txt.rindex("}") + 1])
+    ok = set(int(v) for v in m.get("matches", []))
+    cost = float(data.get("usage", {}).get("cost") or 0)
+    logger.info("ai verify %s: %d candidates -> %d confirmed ($%.3f)", pdf_id, len(boxes), len(ok), cost)
+    return [(i + 1) in ok for i in range(len(boxes))]
