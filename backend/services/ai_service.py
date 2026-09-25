@@ -310,9 +310,11 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
                         tpl = crop_symbol(str(pdf_path), 1, x, y, w, h)
                         geom = load_geometry(tpl["template_id"])
                         n_seg = len(geom.get("seg", [])) if geom else 0
-                        if n_seg < 6:
+                        if n_seg < 4:
+                            # thick strokes plot as single segments, so real symbols can be tiny -
+                            # but under 4 segments there is nothing distinctive to match
                             messages.append({"role": "tool", "tool_call_id": call["id"],
-                                             "content": f"Rejected: the box captured only {n_seg} line segments - that is a fragment, not the whole symbol. Zoom in and box the COMPLETE symbol including all its parts."})
+                                             "content": f"Rejected: the box captured only {n_seg} line segments. Include the whole symbol - and if it is mostly thick solid strokes, include its code letters or adjacent marks in the box too."})
                             yield {"type": "status", "text": f"Box for '{name}' too small ({n_seg} segments) - asking AI to re-box"}
                             continue
                         if n_seg > 150:
@@ -324,6 +326,12 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
                             yield {"type": "status", "text": f"Box for '{name}' too loose ({n_seg} segments) - asking AI to re-box"}
                             continue
                         matches = find_instances(pdf_id, geom) if geom else []
+                        if matches and (len(matches) > 200 or (n_seg < 8 and len(matches) > 60)):
+                            # a tiny/simple template that matches everywhere is a generic fragment
+                            messages.append({"role": "tool", "tool_call_id": call["id"],
+                                             "content": f"Rejected: that box matched {len(matches)} places - the captured geometry is too generic. Re-box including more of the symbol (its code letters or distinctive parts)."})
+                            yield {"type": "status", "text": f"Box for '{name}' too generic ({len(matches)} hits) - asking AI to re-box"}
+                            continue
                         for m in matches:
                             m["page"] = 1
                         segs = len(geom.get("seg", [])) if geom else 0
