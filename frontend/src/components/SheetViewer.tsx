@@ -18,7 +18,6 @@ export function SheetViewer() {
   const manualModeSymbolId = useAppStore((s) => s.manualModeSymbolId);
   const setManualModeSymbolId = useAppStore((s) => s.setManualModeSymbolId);
   const addSymbol = useAppStore((s) => s.addSymbol);
-  const addCountedSymbol = useAppStore((s) => s.addCountedSymbol);
   const addVariant = useAppStore((s) => s.addVariant);
   const confirmMatch = useAppStore((s) => s.confirmMatch);
   const setVariantTarget = useAppStore((s) => s.setVariantTarget);
