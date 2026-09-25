@@ -260,6 +260,12 @@ export function LegendPanel() {
         )}
       </div>
 
+      {isLegendSheet && symbols.length > 0 && (
+        <div className="mx-4 mb-2 px-3 py-2 rounded bg-[#262b3a] border border-[#3a4156]">
+          <p className="text-[12px] text-[#aab2c4] leading-snug">This is the legend — counting happens on drawings. Open any sheet in this discipline and these symbols load there with the <span className="text-white font-semibold">Count</span> and <span className="text-sky-400 font-semibold">✨ AI count</span> buttons.</p>
+        </div>
+      )}
+
       <div className="px-4 pb-2" hidden={isLegendSheet}>
         {!aiBusy ? (
           (() => {
