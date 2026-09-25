@@ -382,9 +382,17 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
 
 VERIFY_SYSTEM = """You verify symbol matches on an electrical/security drawing.
 The first image is the REFERENCE symbol. Each numbered image after it is a CANDIDATE crop.
-A candidate matches if it shows the same device symbol as the reference - any rotation or
-mirroring, letters always read normally, wires/walls crossing it are irrelevant. A different
-device, empty linework, or text alone does not match.
+
+A candidate MATCHES if it is the same device symbol as the reference. Be tolerant:
+- ANY rotation or angle (symbols follow angled walls; a candidate may be rotated 30-60 degrees),
+  and mirror images - accept these.
+- Crossing wires, walls, leader lines or a slightly loose crop - ignore, still a match.
+- The distinctive OUTLINE/shape is what matters; if the shape matches but letters are unclear
+  due to angle or thin lines, still accept.
+
+A candidate does NOT match if it is a clearly DIFFERENT device (different code letters like EM/DR
+vs ES, a different outline shape) or is plain text / a word fragment / empty linework.
+
 Reply with ONLY JSON: {"matches": [<candidate numbers that match>]}"""
 
 

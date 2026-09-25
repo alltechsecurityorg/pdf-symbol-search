@@ -192,10 +192,13 @@ async def run_search_stream(request: SearchRequest):
                 # Low candidate threshold: cast a wide net for recall, since every uncertain
                 # candidate is adjudicated by the AI verifier below.
                 cand_conf = min(request.confidence_threshold, 0.45)
+                # 30-degree rotation steps: consultants place symbols along angled walls/boundaries,
+                # which the default 0/90/180/270 set never proposes.
+                rot_steps = [0, 30, 45, 60, 90, 120, 135, 150, 180, 210, 225, 240, 270, 300, 315, 330]
                 pixel_matches = await run_in_thread(
                     match_symbol_on_page,
                     page_binary, page_gray, template, cand_conf,
-                    None, None,  # scales, rotations (use defaults)
+                    None, rot_steps,
                     str(pdf_path), page_num, page_scale,
                     template_vector, page_dwg,
                     tpl_inner_text, page_texts,

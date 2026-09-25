@@ -397,7 +397,17 @@ def match_symbol_on_page(
             rotated = cv2.rotate(padded_template, cv2.ROTATE_90_COUNTERCLOCKWISE)
             rotated_raw = cv2.rotate(template_binary, cv2.ROTATE_90_COUNTERCLOCKWISE)
         else:
-            continue
+            # arbitrary angle: rotate about centre, expand canvas, white background
+            def _rot(img):
+                h, w = img.shape[:2]
+                M = cv2.getRotationMatrix2D((w / 2, h / 2), rotation, 1.0)
+                cos, sin = abs(M[0, 0]), abs(M[0, 1])
+                nw, nh = int(h * sin + w * cos), int(h * cos + w * sin)
+                M[0, 2] += (nw - w) / 2
+                M[1, 2] += (nh - h) / 2
+                return cv2.warpAffine(img, M, (nw, nh), flags=cv2.INTER_NEAREST, borderValue=255)
+            rotated = _rot(padded_template)
+            rotated_raw = _rot(template_binary)
 
         for scale in scales:
             scaled_w = int(rotated.shape[1] * scale)
