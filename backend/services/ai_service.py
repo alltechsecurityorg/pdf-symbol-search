@@ -28,6 +28,7 @@ REASONING = os.environ.get("AI_REASONING", "low")
 MAX_IMAGES_KEPT = 4  # older views are pruned from the conversation to keep calls fast
 COST_CAP = float(os.environ.get("AI_COST_CAP", "2.0"))
 MAX_STEPS = int(os.environ.get("AI_MAX_STEPS", "24"))
+MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS", "1600"))  # reasoning + reply headroom; also what OpenRouter reserves against remaining credit
 
 TOOLS = [
     {"type": "function", "function": {
@@ -242,13 +243,21 @@ def run_ai_count(pdf_id: str, targets: list | None = None, legend_pdf_id: str | 
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                 json={"model": model or MODEL, "messages": messages, "tools": TOOLS,
                       "reasoning": {"effort": REASONING}, "usage": {"include": True},
-                      "max_tokens": 4000})
+                      "max_tokens": MAX_TOKENS})
             data = r.json()
         except Exception as e:  # noqa: BLE001
             yield {"type": "error", "detail": f"model call failed: {e}"}
             return
         if "error" in data:
-            yield {"type": "error", "detail": str(data["error"])[:300]}
+            msg = str(data["error"])
+            if "credits" in msg.lower() or "402" in msg:
+                # out of AI budget: the exact-matcher baselines already streamed, so finish
+                # usefully instead of failing the run
+                yield {"type": "done", "items": items, "cost": round(total_cost, 3),
+                       "summary": ("Exact-matcher counts delivered. AI sweep skipped: the OpenRouter key is out of credit - top up at openrouter.ai to re-enable it."
+                                   if items else "AI unavailable: the OpenRouter key is out of credit - top up at openrouter.ai.")}
+            else:
+                yield {"type": "error", "detail": msg[:300]}
             return
         u = data.get("usage", {})
         total_cost += float(u.get("cost") or 0)
