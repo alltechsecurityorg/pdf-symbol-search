@@ -122,26 +122,29 @@ export function LegendPanel() {
     if (isLegendSheet && ctx) updateLegendItem(ctx.projectId, ctx.takeoffId, ctx.disciplineId, templateId, patch);
   };
 
-  const startAi = () => {
-    if (!sitePdf || aiBusy) return;
-    const all = useAppStore.getState().symbols;
-    const checked = all.filter((x) => x.selectedForSearch);
-    const targets = (checked.length > 0 ? checked : all).map((x) => ({ name: x.name, thumbnail: x.thumbnail, template_id: x.templateId }));
+  // AI sweep: runs automatically after every exact count, hunting instances drawn differently
+  // from the reference. Finds MERGE into the existing rows (variants and confirmations kept).
+  const startSweep = (list: SymbolTemplate[]) => {
+    if (!sitePdf || aiBusy || list.length === 0) return;
+    const targets = list.map((x) => ({ name: x.name, thumbnail: x.thumbnail, template_id: x.templateId }));
     setAiBusy(true);
-    setAiLog([targets.length ? `AI is finding ${checked.length > 0 ? `your ${targets.length} selected` : `all ${targets.length}`} symbol${targets.length === 1 ? '' : 's'}…` : 'Reading the legend…']);
+    setAiLog([`AI is double-checking ${targets.length} symbol${targets.length === 1 ? '' : 's'}…`]);
     aiAbort.current = runAiCount(sitePdf.pdfId, targets, legendPdfId && legendPdfId !== sitePdf.pdfId ? legendPdfId : null, {
       onStatus: (t) => log(t),
       onItem: (it) => {
         const st = useAppStore.getState();
-        // a re-count of the same name replaces the earlier item (and frees its colour)
-        const old = (it.replaces ? st.symbols.find((x) => x.templateId === it.replaces) : undefined) ?? st.symbols.find((x) => x.name.trim().toLowerCase() === it.name.trim().toLowerCase());
-        if (old) removeSymbol(old.id);
-        const used = useAppStore.getState().symbols.map((x) => x.color);
-        const color = PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[used.length % PRESET_COLORS.length];
-        addCountedSymbol({ name: it.name, color, thumbnail: it.thumbnail, templateId: it.template_id, cropRegion: it.crop_region, matches: stripLegendSamples(it.matches) });
+        const old = st.symbols.find((x) => x.name.trim().toLowerCase() === it.name.trim().toLowerCase());
+        if (old) {
+          appendMatchesById(old.id, stripLegendSamples(it.matches)); // dedupes internally
+        } else {
+          const used = st.symbols.map((x) => x.color);
+          const color = PRESET_COLORS.find((c) => !used.includes(c)) || PRESET_COLORS[used.length % PRESET_COLORS.length];
+          addCountedSymbol({ name: it.name, color, thumbnail: it.thumbnail, templateId: it.template_id, cropRegion: it.crop_region, matches: stripLegendSamples(it.matches) });
+        }
       },
-      onDone: (summary, cost, n) => { log(`Done - ${n} symbol types (cost $${cost}). ${summary}`); setAiBusy(false); },
-      onError: (e) => { log(`AI count failed: ${e.message}`); setAiBusy(false); },
+
+      onDone: (summary, cost) => { log(`AI check done${cost ? ` ($${cost})` : ''}. ${summary}`); setAiBusy(false); },
+      onError: (e) => { log(`AI check failed: ${e.message}`); setAiBusy(false); },
     });
   };
   const stopAi = () => { aiAbort.current?.abort(); setAiBusy(false); log('Stopped.'); };
@@ -187,6 +190,7 @@ export function LegendPanel() {
           setSearchProgress(null);
           setIsSearching(false);
           abortRef.current = null;
+          startSweep(toSearch); // seamless: the AI double-checks what was just counted
         },
         onError: (err) => {
           console.error('Count failed:', err);
@@ -316,30 +320,21 @@ export function LegendPanel() {
             const aiTip = symbols.length === 0
               ? (legendPdfId ? 'AI counts the discipline legend\u2019s symbol types.' : 'AI counts the types from this sheet\u2019s legend.')
               : checked > 0 ? `AI finds and counts the ${checked} ticked symbol${checked === 1 ? '' : 's'}.` : `AI finds and counts all ${symbols.length} symbols.`;
+            void aiTip;
             return (
               <div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      const st = useAppStore.getState();
-                      const ids = (checked > 0 ? st.symbols.filter((s) => s.selectedForSearch) : st.symbols.filter((s) => !s.searched && !s.queued)).map((s) => s.id);
-                      armIds(ids);
-                    }}
-                    disabled={!activePdf || pdfLoading || exactN === 0 || isSearching}
-                    title={checked > 0 ? 'Exact-match count of the ticked symbols' : 'Exact-match count of everything not yet counted'}
-                    className="flex-1 h-10 rounded-md bg-orange-500 hover:bg-orange-600 text-[14px] font-bold text-white cursor-pointer disabled:opacity-40 disabled:cursor-default"
-                  >
-                    Count {checked > 0 ? `${checked} selected` : (uncounted > 0 ? `page (${uncounted})` : 'page')}
-                  </button>
-                  <button
-                    onClick={startAi}
-                    disabled={!activePdf || pdfLoading}
-                    title={aiTip}
-                    className="flex-1 h-10 rounded-md border border-sky-500/70 text-sky-400 hover:bg-sky-500 hover:text-white text-[14px] font-bold cursor-pointer disabled:opacity-40 disabled:cursor-default"
-                  >
-                    ✨ AI count{checked > 0 ? ` ${checked} selected` : ''}
-                  </button>
-                </div>
+                <button
+                  onClick={() => {
+                    const st = useAppStore.getState();
+                    const ids = (checked > 0 ? st.symbols.filter((s) => s.selectedForSearch) : st.symbols.filter((s) => !s.searched && !s.queued)).map((s) => s.id);
+                    armIds(ids);
+                  }}
+                  disabled={!activePdf || pdfLoading || exactN === 0 || isSearching}
+                  title={checked > 0 ? 'Counts the ticked symbols: exact geometry first, then an automatic AI double-check' : 'Counts everything not yet counted: exact geometry first, then an automatic AI double-check'}
+                  className="w-full h-10 rounded-md bg-orange-500 hover:bg-orange-600 text-[14px] font-bold text-white cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                >
+                  Count {checked > 0 ? `${checked} selected` : (uncounted > 0 ? `page (${uncounted})` : 'page')} <span className="font-semibold opacity-80">· exact + ✨ AI</span>
+                </button>
                 <p className="text-[11px] text-[#8a92a6] mt-1.5 px-0.5 leading-snug">
                   {checked > 0 ? `Runs only the ${checked} ticked symbol${checked === 1 ? '' : 's'}.` : 'Tick rows to count just a subset.'}
                 </p>
@@ -351,7 +346,7 @@ export function LegendPanel() {
             <div className="flex items-center justify-between mb-1.5">
               <span className="flex items-center gap-2 text-[14px] font-bold text-white">
                 <svg className="w-4 h-4 animate-spin" viewBox="0 0 50 50" fill="none"><circle cx="25" cy="25" r="20" stroke="#1a1f2b" strokeWidth="6"/><path d="M45 25a20 20 0 0 0-20-20" stroke="#22b8f0" strokeWidth="6" strokeLinecap="round"/></svg>
-                AI counting…
+                AI double-checking…
               </span>
               <button onClick={stopAi} className="text-[12px] text-[#aab2c4] hover:text-white cursor-pointer">Stop</button>
             </div>
